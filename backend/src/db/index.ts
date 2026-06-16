@@ -2,10 +2,14 @@ import Database from 'better-sqlite3'
 import { drizzle } from 'drizzle-orm/better-sqlite3'
 import * as schema from './schema.js'
 import path from 'path'
+import fs from 'fs'
 import { fileURLToPath } from 'url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const dbPath = path.resolve(__dirname, '../../../data/sdd.db')
+
+// Ensure the data directory exists before opening the database
+fs.mkdirSync(path.dirname(dbPath), { recursive: true })
 
 const sqlite = new Database(dbPath)
 sqlite.pragma('journal_mode = WAL')
