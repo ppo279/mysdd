@@ -189,8 +189,13 @@ export interface AgentRaw {
   upstream: string[]
 }
 
+export interface GlobalConfig {
+  base_prompts: string[]
+}
+
 export interface AgentsYamlRaw {
   runtimes: RuntimeRaw[]
+  global: GlobalConfig
   agents: AgentRaw[]
 }
 

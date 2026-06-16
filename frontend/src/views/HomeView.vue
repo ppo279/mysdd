@@ -3,131 +3,120 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useWorkspaceStore } from '@/stores/workspace'
 import type { WorkspaceInput } from '@/api'
+import {
+  NLayout, NLayoutHeader, NLayoutContent, NSpace, NButton, NGrid, NGridItem,
+  NCard, NTag, NText, NEmpty, NSpin, NModal, NForm, NFormItem, NInput,
+  NSelect, useMessage,
+} from 'naive-ui'
 
 const router = useRouter()
 const store = useWorkspaceStore()
+const message = useMessage()
 
 const showCreate = ref(false)
-const form = ref<WorkspaceInput>({
-  name: '',
-  description: '',
-  repoUrl: '',
-  techStack: 'ts',
-  background: '',
-})
+const creating = ref(false)
+const form = ref<WorkspaceInput>({ name: '', description: '', repoUrl: '', techStack: 'ts', background: '' })
+
+const techOptions = [
+  { label: 'TypeScript / Web', value: 'ts' },
+  { label: 'Java', value: 'java' },
+  { label: 'Python', value: 'python' },
+  { label: 'C#', value: 'csharp' },
+]
+
+const STACK_COLORS: Record<string, 'info' | 'success' | 'warning' | 'error' | 'default'> = {
+  ts: 'info', java: 'warning', python: 'success', csharp: 'error',
+}
 
 onMounted(() => store.fetchAll())
 
 async function handleCreate() {
   if (!form.value.name.trim()) return
-  const ws = await store.create(form.value)
-  showCreate.value = false
-  form.value = { name: '', description: '', repoUrl: '', techStack: 'ts', background: '' }
-  router.push(`/workspace/${ws.id}`)
+  creating.value = true
+  try {
+    const ws = await store.create(form.value)
+    showCreate.value = false
+    form.value = { name: '', description: '', repoUrl: '', techStack: 'ts', background: '' }
+    router.push(`/workspace/${ws.id}`)
+    message.success('Workspace 创建成功')
+  } catch (e: any) {
+    message.error(e.message)
+  } finally {
+    creating.value = false
+  }
 }
 </script>
 
 <template>
-  <div class="home">
-    <header class="header">
-      <h1>SDD Multi-Agent</h1>
-      <div class="header-actions">
-        <button class="btn-secondary" @click="router.push('/config')">⚙ Agent 配置</button>
-        <button class="btn-primary" @click="showCreate = true">+ 新建 Workspace</button>
+  <NLayout style="height: 100vh;">
+    <NLayoutHeader style="padding: 0 24px; border-bottom: 1px solid #efeff5; background: #fff;">
+      <NSpace justify="space-between" align="center" style="height: 56px;">
+        <NText strong style="font-size: 18px; color: #18181c;">SDD Multi-Agent</NText>
+        <NSpace>
+          <NButton @click="router.push('/config')">⚙ Agent 配置</NButton>
+          <NButton type="primary" @click="showCreate = true">+ 新建 Workspace</NButton>
+        </NSpace>
+      </NSpace>
+    </NLayoutHeader>
+
+    <NLayoutContent style="padding: 28px 24px; overflow: auto;">
+      <div v-if="store.loading" style="text-align:center; padding: 80px 0;">
+        <NSpin size="large" />
       </div>
-    </header>
 
-    <div v-if="store.loading" class="loading">加载中...</div>
+      <NEmpty v-else-if="store.workspaces.length === 0"
+        description="还没有 Workspace，点击右上角新建一个"
+        style="margin-top: 80px;" />
 
-    <div v-else-if="store.workspaces.length === 0" class="empty">
-      <p>还没有 Workspace，点击右上角新建一个</p>
-    </div>
+      <NGrid v-else :cols="3" :x-gap="16" :y-gap="16" responsive="screen" :item-responsive="true">
+        <NGridItem v-for="ws in store.workspaces" :key="ws.id" span="1">
+          <NCard hoverable style="cursor: pointer;" @click="router.push(`/workspace/${ws.id}`)">
+            <NSpace vertical :size="8">
+              <NText strong style="font-size: 15px;">{{ ws.name }}</NText>
+              <NText depth="3" style="font-size: 13px; min-height: 20px;">
+                {{ ws.description || '无描述' }}
+              </NText>
+              <NSpace align="center">
+                <NTag :type="STACK_COLORS[ws.techStack] ?? 'default'" size="small" round>
+                  {{ ws.techStack }}
+                </NTag>
+                <NText v-if="ws.repoUrl" depth="3" style="font-size: 12px;">
+                  {{ ws.repoUrl }}
+                </NText>
+              </NSpace>
+            </NSpace>
+          </NCard>
+        </NGridItem>
+      </NGrid>
+    </NLayoutContent>
+  </NLayout>
 
-    <div v-else class="workspace-grid">
-      <div
-        v-for="ws in store.workspaces"
-        :key="ws.id"
-        class="workspace-card"
-        @click="router.push(`/workspace/${ws.id}`)"
-      >
-        <div class="ws-name">{{ ws.name }}</div>
-        <div class="ws-desc">{{ ws.description || '无描述' }}</div>
-        <div class="ws-meta">
-          <span class="badge">{{ ws.techStack }}</span>
-          <span v-if="ws.repoUrl" class="repo">{{ ws.repoUrl }}</span>
-        </div>
-      </div>
-    </div>
-
-    <div v-if="showCreate" class="modal-overlay" @click.self="showCreate = false">
-      <div class="modal">
-        <h2>新建 Workspace</h2>
-        <label>名称 *</label>
-        <input v-model="form.name" placeholder="如：电商平台" />
-        <label>描述</label>
-        <input v-model="form.description" placeholder="简要说明项目用途" />
-        <label>仓库地址</label>
-        <input v-model="form.repoUrl" placeholder="https://github.com/..." />
-        <label>技术选型</label>
-        <select v-model="form.techStack">
-          <option value="ts">TypeScript / Web</option>
-          <option value="java">Java</option>
-          <option value="python">Python</option>
-          <option value="csharp">C#</option>
-        </select>
-        <label>背景上下文</label>
-        <textarea v-model="form.background" rows="4" placeholder="项目背景、约束、注意事项..." />
-        <div class="modal-actions">
-          <button class="btn-secondary" @click="showCreate = false">取消</button>
-          <button class="btn-primary" :disabled="!form.name.trim()" @click="handleCreate">创建</button>
-        </div>
-      </div>
-    </div>
-  </div>
+  <NModal v-model:show="showCreate" preset="card" title="新建 Workspace" style="width: 500px;">
+    <NForm label-placement="top" :show-feedback="false">
+      <NFormItem label="名称 *">
+        <NInput v-model:value="form.name" placeholder="如：电商平台" />
+      </NFormItem>
+      <NFormItem label="描述">
+        <NInput v-model:value="form.description" placeholder="简要说明项目用途" />
+      </NFormItem>
+      <NFormItem label="仓库地址">
+        <NInput v-model:value="form.repoUrl" placeholder="https://github.com/..." />
+      </NFormItem>
+      <NFormItem label="技术选型">
+        <NSelect v-model:value="form.techStack" :options="techOptions" />
+      </NFormItem>
+      <NFormItem label="背景上下文">
+        <NInput v-model:value="form.background" type="textarea" :rows="4"
+          placeholder="项目背景、约束、注意事项..." />
+      </NFormItem>
+    </NForm>
+    <template #footer>
+      <NSpace justify="end">
+        <NButton @click="showCreate = false">取消</NButton>
+        <NButton type="primary" :loading="creating" :disabled="!form.name.trim()" @click="handleCreate">
+          创建
+        </NButton>
+      </NSpace>
+    </template>
+  </NModal>
 </template>
-
-<style scoped>
-.home { padding: 24px; max-width: 1100px; margin: 0 auto; }
-.header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 32px; }
-.header-actions { display: flex; gap: 8px; }
-h1 { font-size: 1.6rem; font-weight: 700; color: #1a1a2e; }
-.workspace-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
-.workspace-card {
-  border: 1px solid #e2e8f0; border-radius: 10px; padding: 20px;
-  cursor: pointer; transition: all 0.2s; background: #fff;
-}
-.workspace-card:hover { border-color: #6366f1; box-shadow: 0 4px 12px rgba(99,102,241,0.12); }
-.ws-name { font-size: 1.05rem; font-weight: 600; margin-bottom: 6px; }
-.ws-desc { color: #64748b; font-size: 0.875rem; margin-bottom: 12px; }
-.ws-meta { display: flex; gap: 8px; align-items: center; }
-.badge { background: #ede9fe; color: #6d28d9; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; }
-.repo { color: #94a3b8; font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.empty, .loading { text-align: center; color: #94a3b8; padding: 80px 0; }
-.modal-overlay {
-  position: fixed; inset: 0; background: rgba(0,0,0,0.4);
-  display: flex; align-items: center; justify-content: center; z-index: 100;
-}
-.modal {
-  background: #fff; border-radius: 12px; padding: 28px; width: 480px;
-  display: flex; flex-direction: column; gap: 10px;
-}
-.modal h2 { margin-bottom: 8px; font-size: 1.1rem; }
-.modal label { font-size: 0.85rem; color: #64748b; margin-top: 4px; }
-.modal input, .modal select, .modal textarea {
-  border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px 10px;
-  font-size: 0.9rem; width: 100%; box-sizing: border-box; outline: none;
-}
-.modal input:focus, .modal select:focus, .modal textarea:focus { border-color: #6366f1; }
-.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
-.btn-primary {
-  background: #6366f1; color: #fff; border: none; padding: 8px 16px;
-  border-radius: 6px; cursor: pointer; font-size: 0.9rem;
-}
-.btn-primary:hover { background: #4f46e5; }
-.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn-secondary {
-  background: #f1f5f9; color: #475569; border: none; padding: 8px 16px;
-  border-radius: 6px; cursor: pointer; font-size: 0.9rem;
-}
-.btn-secondary:hover { background: #e2e8f0; }
-</style>

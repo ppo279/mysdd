@@ -3,6 +3,12 @@ runtimes:
     type: claude-cli
     command: claude
 
+global:
+  # 所有 Agent 对话必须注入的基础层，按顺序拼接在角色提示词之前
+  base_prompts:
+    - SDDInAction/0.agents/constitution.md
+    - SDDInAction/0.agents/AGENTS.md
+
 agents:
   - id: spec
     name: Spec Agent

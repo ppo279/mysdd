@@ -10,9 +10,7 @@ export interface AgentConfig {
   id: string
   name: string
   runtime: string
-  // 单一提示词文件（不区分技术栈）
   prompt?: string
-  // 按技术栈分的提示词文件
   prompts?: Record<string, string>
   outputFile: string
   upstream: string[]
@@ -24,8 +22,14 @@ export interface RuntimeConfig {
   command?: string
 }
 
+export interface GlobalConfig {
+  // 所有 Agent 共享的基础提示词文件列表（按顺序注入）
+  base_prompts: string[]
+}
+
 export interface AgentsYaml {
   runtimes: RuntimeConfig[]
+  global: GlobalConfig
   agents: AgentConfig[]
 }
 
@@ -42,9 +46,13 @@ export function loadAgentsConfig(): AgentsYaml {
   const raw = fs.readFileSync(yamlPath, 'utf-8')
   const parsed = yaml.load(raw) as Record<string, unknown>
 
-  // 驼峰转换
+  const globalRaw = (parsed.global ?? {}) as Record<string, unknown>
+
   _config = {
-    runtimes: parsed.runtimes as RuntimeConfig[],
+    runtimes: (parsed.runtimes as RuntimeConfig[]) ?? [],
+    global: {
+      base_prompts: (globalRaw.base_prompts as string[]) ?? [],
+    },
     agents: (parsed.agents as Array<Record<string, unknown>>).map((a) => ({
       id: a.id as string,
       name: a.name as string,
@@ -66,41 +74,49 @@ export function getAgentConfig(agentId: string): AgentConfig {
   return agent
 }
 
-// 读取提示词文件内容
 export function loadPromptFile(relativePath: string): string {
   const fullPath = path.resolve(ROOT, relativePath)
   return fs.readFileSync(fullPath, 'utf-8')
 }
 
-// 拼装系统提示词
+// ── 系统提示拼装（三层）────────────────────────────────────────
+// Layer 1: global.base_prompts（所有 Agent 共享）
+// Layer 2: agent 角色提示词（按 techStack 选择）
+// Layer 3: workspace 背景（运行时注入）
 export function buildSystemPrompt(agentId: string, techStack: string, workspaceBackground: string): string {
+  const { global: globalCfg } = loadAgentsConfig()
   const agent = getAgentConfig(agentId)
 
-  const constitutionPath = path.resolve(ROOT, 'SDDInAction/0.agents/constitution.md')
-  const agentsPath = path.resolve(ROOT, 'SDDInAction/0.agents/AGENTS.md')
+  const parts: string[] = []
 
-  const constitution = fs.readFileSync(constitutionPath, 'utf-8')
-  const agentsMd = fs.readFileSync(agentsPath, 'utf-8')
-
-  // 选择阶段提示词
-  let stagePrompt = ''
-  if (agent.prompt) {
-    stagePrompt = loadPromptFile(agent.prompt)
-  } else if (agent.prompts) {
-    const promptFile = agent.prompts[techStack] ?? Object.values(agent.prompts)[0]
-    if (promptFile) stagePrompt = loadPromptFile(promptFile)
+  // Layer 1: 基础层
+  for (const filePath of globalCfg.base_prompts) {
+    try {
+      parts.push(loadPromptFile(filePath))
+    } catch {
+      console.warn(`[buildSystemPrompt] base_prompt file not found: ${filePath}`)
+    }
   }
 
-  const parts = [constitution, agentsMd, stagePrompt]
+  // Layer 2: 角色层
+  let rolePrompt = ''
+  if (agent.prompt) {
+    rolePrompt = loadPromptFile(agent.prompt)
+  } else if (agent.prompts) {
+    const file = agent.prompts[techStack] ?? Object.values(agent.prompts)[0]
+    if (file) rolePrompt = loadPromptFile(file)
+  }
+  if (rolePrompt) parts.push(rolePrompt)
 
+  // Layer 3: 运行时背景
   if (workspaceBackground.trim()) {
-    parts.push(`\n---\n## Workspace 背景信息\n${workspaceBackground}`)
+    parts.push(`## Workspace 背景信息\n\n${workspaceBackground}`)
   }
 
   return parts.join('\n\n---\n\n')
 }
 
-// 拼装上游产物注入
+// 上游产物注入（在 Layer 3 之后追加）
 export function buildUpstreamContext(agentId: string, artifacts: Record<string, string>): string {
   const agent = getAgentConfig(agentId)
   if (agent.upstream.length === 0) return ''
@@ -108,8 +124,8 @@ export function buildUpstreamContext(agentId: string, artifacts: Record<string, 
   const sections = agent.upstream
     .filter((upId) => artifacts[upId])
     .map((upId) => {
-      const config = getAgentConfig(upId)
-      return `### 已确认的 ${config.outputFile}\n\n${artifacts[upId]}`
+      const cfg = getAgentConfig(upId)
+      return `### 已确认的 ${cfg.outputFile}\n\n${artifacts[upId]}`
     })
 
   if (sections.length === 0) return ''

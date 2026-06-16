@@ -1,16 +1,25 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { api, type AgentsYamlRaw, type RuntimeRaw, type AgentRaw, type DetectedRuntime } from '@/api'
+import { defineAsyncComponent } from 'vue'
+import {
+  NLayout, NLayoutHeader, NLayoutContent, NSpace, NButton, NText, NEmpty,
+  NTabs, NTabPane, NTag, NSpin, NAlert,
+  NModal, NForm, NFormItem, NInput, NSelect, NCheckbox, NRadioGroup, NRadio,
+  NList, NListItem, NThing, NDivider, useMessage,
+  NScrollbar,
+} from 'naive-ui'
+const MarkdownEditor = defineAsyncComponent(() => import('@/components/MarkdownEditor.vue'))
 
 const router = useRouter()
+const message = useMessage()
 
 // ─── 数据 ──────────────────────────────────────────────
-const config = ref<AgentsYamlRaw>({ runtimes: [], agents: [] })
+const config = ref<AgentsYamlRaw>({ runtimes: [], global: { base_prompts: [] }, agents: [] })
 const promptFiles = ref<string[]>([])
 const saving = ref(false)
-const saveMsg = ref('')
-const activeTab = ref<'runtimes' | 'agents'>('agents')
+const activeTab = ref<'agents' | 'global' | 'runtimes'>('agents')
 
 // ─── 运行时编辑 ────────────────────────────────────────
 const runtimeModal = ref(false)
@@ -36,7 +45,6 @@ async function runDetect() {
 function addDetected(rt: DetectedRuntime) {
   const exists = config.value.runtimes.find((r) => r.id === rt.id)
   if (exists) {
-    // 覆盖更新
     Object.assign(exists, { type: rt.type, command: rt.command })
   } else {
     config.value.runtimes.push({ id: rt.id, type: rt.type, command: rt.command })
@@ -58,25 +66,102 @@ const agentForm = reactive<AgentRaw & { promptMode: 'single' | 'multi' }>({
   prompt: '', prompts: {}, output_file: '', upstream: [],
   promptMode: 'single',
 })
-// 多技术栈配置的中间状态
 const multiPromptEntries = ref<{ key: string; value: string }[]>([])
 
-// ─── Prompt 编辑器 ─────────────────────────────────────
-const promptEditor = ref(false)
-const promptEditorFile = ref('')
-const promptEditorContent = ref('')
-const promptEditorSaving = ref(false)
-// 当前正在编辑哪个 agent 的哪个 tech_stack key（multi 模式）
-const promptEditorContext = ref<{ agentIdx: number; techKey?: string } | null>(null)
+const inlinePromptContent = ref('')
+const inlinePromptSaving = ref(false)
+const activeMultiIdx = ref<number | null>(null)
+
+async function loadInlinePrompt(filePath: string) {
+  if (!filePath.trim()) { inlinePromptContent.value = ''; return }
+  try {
+    const result = await api.config.getPrompt(filePath)
+    inlinePromptContent.value = result.content
+  } catch {
+    inlinePromptContent.value = ''
+  }
+}
+
+watch(() => agentForm.prompt, (val) => {
+  if (agentForm.promptMode === 'single') loadInlinePrompt(val ?? '')
+})
+
+async function selectMultiEntry(idx: number) {
+  activeMultiIdx.value = idx
+  await loadInlinePrompt(multiPromptEntries.value[idx]?.value ?? '')
+}
+
+async function saveInlinePrompt() {
+  let filePath = ''
+  if (agentForm.promptMode === 'single') {
+    filePath = agentForm.prompt ?? ''
+  } else if (activeMultiIdx.value !== null) {
+    filePath = multiPromptEntries.value[activeMultiIdx.value]?.value ?? ''
+  }
+  if (!filePath.trim()) return
+  inlinePromptSaving.value = true
+  try {
+    await api.config.savePrompt(filePath, inlinePromptContent.value)
+    message.success('文件已保存')
+  } catch (e: any) {
+    message.error(e.message)
+  } finally {
+    inlinePromptSaving.value = false
+  }
+}
+
+// ─── 全局基础层 ────────────────────────────────────────
+const globalPreviewIdx = ref<number | null>(null)
+const globalPreviewContent = ref('')
+const globalPreviewSaving = ref(false)
+
+async function loadGlobalPreview(idx: number) {
+  globalPreviewIdx.value = idx
+  const filePath = config.value.global?.base_prompts?.[idx] ?? ''
+  if (!filePath) { globalPreviewContent.value = ''; return }
+  try {
+    const result = await api.config.getPrompt(filePath)
+    globalPreviewContent.value = result.content
+  } catch {
+    globalPreviewContent.value = ''
+  }
+}
+
+async function saveGlobalPreview() {
+  const idx = globalPreviewIdx.value
+  if (idx === null) return
+  const filePath = config.value.global?.base_prompts?.[idx] ?? ''
+  if (!filePath) return
+  globalPreviewSaving.value = true
+  try {
+    await api.config.savePrompt(filePath, globalPreviewContent.value)
+    message.success('文件已保存')
+  } catch (e: any) {
+    message.error(e.message)
+  } finally {
+    globalPreviewSaving.value = false
+  }
+}
+
+function addBasePrompt() {
+  config.value.global.base_prompts.push('')
+}
+
+function removeBasePrompt(idx: number) {
+  config.value.global.base_prompts.splice(idx, 1)
+  if (globalPreviewIdx.value === idx) { globalPreviewIdx.value = null; globalPreviewContent.value = '' }
+}
 
 // ─── 计算属性 ──────────────────────────────────────────
 const runtimeIds = computed(() => config.value.runtimes.map((r) => r.id))
 const agentIds = computed(() => config.value.agents.map((a) => a.id))
+const runtimeOptions = computed(() => runtimeIds.value.map((id) => ({ label: id, value: id })))
 
 onMounted(async () => {
   const [cfg, files] = await Promise.all([api.config.agents(), api.config.promptFiles()])
   config.value = {
     runtimes: (cfg.runtimes ?? []).map((r) => ({ id: r.id, type: r.type, command: (r as any).command ?? '' })),
+    global: { base_prompts: cfg.global?.base_prompts ?? [] },
     agents: cfg.agents ?? [],
   }
   promptFiles.value = files
@@ -85,13 +170,11 @@ onMounted(async () => {
 // ─── 保存整体配置 ──────────────────────────────────────
 async function saveConfig() {
   saving.value = true
-  saveMsg.value = ''
   try {
     await api.config.saveAgents(config.value)
-    saveMsg.value = '✓ 已保存'
-    setTimeout(() => (saveMsg.value = ''), 2000)
+    message.success('配置已保存')
   } catch (e: any) {
-    saveMsg.value = '✗ ' + e.message
+    message.error(e.message)
   } finally {
     saving.value = false
   }
@@ -132,10 +215,12 @@ function openAddAgent() {
     prompt: '', prompts: {}, output_file: '', upstream: [], promptMode: 'single',
   })
   multiPromptEntries.value = []
+  inlinePromptContent.value = ''
+  activeMultiIdx.value = null
   agentModal.value = true
 }
 
-function openEditAgent(agent: AgentRaw) {
+async function openEditAgent(agent: AgentRaw) {
   editingAgent.value = agent
   const hasMulti = !!agent.prompts && Object.keys(agent.prompts).length > 0
   Object.assign(agentForm, {
@@ -147,7 +232,13 @@ function openEditAgent(agent: AgentRaw) {
   multiPromptEntries.value = hasMulti
     ? Object.entries(agent.prompts!).map(([key, value]) => ({ key, value }))
     : [{ key: '', value: '' }]
+  activeMultiIdx.value = null
+  inlinePromptContent.value = ''
   agentModal.value = true
+
+  if (!hasMulti && agent.prompt) {
+    await loadInlinePrompt(agent.prompt)
+  }
 }
 
 function saveAgent() {
@@ -197,47 +288,7 @@ function removeMultiEntry(idx: number) {
   multiPromptEntries.value.splice(idx, 1)
 }
 
-// ─── Prompt 编辑器 ─────────────────────────────────────
-async function openPromptEditor(filePath: string, context?: { agentIdx: number; techKey?: string }) {
-  if (!filePath.trim()) { alert('请先填写文件路径'); return }
-  promptEditorFile.value = filePath
-  promptEditorContext.value = context ?? null
-  try {
-    const result = await api.config.getPrompt(filePath)
-    promptEditorContent.value = result.content
-  } catch {
-    promptEditorContent.value = ''
-  }
-  promptEditor.value = true
-}
-
-async function savePromptEditor() {
-  promptEditorSaving.value = true
-  try {
-    await api.config.savePrompt(promptEditorFile.value, promptEditorContent.value)
-    promptEditor.value = false
-  } catch (e: any) {
-    alert('保存失败: ' + e.message)
-  } finally {
-    promptEditorSaving.value = false
-  }
-}
-
-// 从文件列表选择文件（填入输入框）
-function selectFile(file: string) {
-  // 如果 prompt editor 的文件选择器打开，直接设置
-  if (selectingFor.value === 'single') {
-    agentForm.prompt = file
-  } else if (selectingFor.value !== null) {
-    const idx = selectingFor.value as number
-    if (multiPromptEntries.value[idx]) {
-      multiPromptEntries.value[idx].value = file
-    }
-  }
-  selectingFor.value = null
-  filePickerOpen.value = false
-}
-
+// ─── 文件浏览器 ─────────────────────────────────────────
 const filePickerOpen = ref(false)
 const filePickerFilter = ref('')
 const selectingFor = ref<'single' | number | null>(null)
@@ -250,564 +301,396 @@ function openFilePicker(target: 'single' | number) {
   filePickerFilter.value = ''
   filePickerOpen.value = true
 }
+
+function selectFile(file: string) {
+  if (selectingFor.value === 'single') {
+    agentForm.prompt = file
+  } else if (selectingFor.value !== null) {
+    const idx = selectingFor.value as number
+    if (multiPromptEntries.value[idx]) {
+      multiPromptEntries.value[idx].value = file
+    }
+  }
+  selectingFor.value = null
+  filePickerOpen.value = false
+}
 </script>
 
 <template>
-  <div class="config-view">
-    <!-- 顶栏 -->
-    <div class="topbar">
-      <div class="topbar-left">
-        <span class="back-link" @click="router.push('/')">← 返回</span>
-        <h1>Agent 配置</h1>
-      </div>
-      <div class="topbar-right">
-        <span v-if="saveMsg" class="save-msg" :class="{ error: saveMsg.startsWith('✗') }">
-          {{ saveMsg }}
-        </span>
-        <button class="btn-primary" :disabled="saving" @click="saveConfig">
-          {{ saving ? '保存中...' : '保存配置' }}
-        </button>
-      </div>
-    </div>
+  <NLayout style="height: 100vh;">
+    <NLayoutHeader style="padding: 0 20px; border-bottom: 1px solid #efeff5; background: #fff;">
+      <NSpace justify="space-between" align="center" style="height: 56px;">
+        <NSpace align="center">
+          <NButton text @click="router.push('/')">← 返回</NButton>
+          <NText strong style="font-size:16px;">Agent 配置</NText>
+        </NSpace>
+        <NButton type="primary" :loading="saving" @click="saveConfig">保存配置</NButton>
+      </NSpace>
+    </NLayoutHeader>
 
-    <!-- 标签页 -->
-    <div class="tabs">
-      <button :class="['tab', activeTab === 'agents' ? 'active' : '']" @click="activeTab = 'agents'">
-        Agent 列表
-      </button>
-      <button :class="['tab', activeTab === 'runtimes' ? 'active' : '']" @click="activeTab = 'runtimes'">
-        运行时
-      </button>
-    </div>
+    <NLayoutContent style="overflow: auto;">
+      <NTabs v-model:value="activeTab" type="line" animated style="padding: 0 20px;">
 
-    <!-- ─── Agent 列表 ─────────────────────────────────── -->
-    <div v-if="activeTab === 'agents'" class="section">
-      <div class="section-header">
-        <p class="section-tip">配置 Agent 的名称、运行时与指令文件。流转顺序即为列表顺序。</p>
-        <button class="btn-secondary" @click="openAddAgent">+ 新增 Agent</button>
-      </div>
+        <!-- ─── Agent 列表 ─── -->
+        <NTabPane name="agents" tab="Agent 列表">
+          <div style="padding: 16px 0;">
+            <NSpace justify="space-between" align="center" style="margin-bottom: 14px;">
+              <NText depth="3" style="font-size:13px;">配置 Agent 的名称、运行时与指令文件。流转顺序即为列表顺序。</NText>
+              <NButton @click="openAddAgent">+ 新增 Agent</NButton>
+            </NSpace>
 
-      <div class="agent-list">
-        <div v-for="(agent, idx) in config.agents" :key="agent.id" class="agent-card">
-          <div class="agent-order">{{ idx + 1 }}</div>
-          <div class="agent-info">
-            <div class="agent-name">{{ agent.name }}</div>
-            <div class="agent-meta">
-              <span class="tag">{{ agent.id }}</span>
-              <span class="tag tag-runtime">{{ agent.runtime }}</span>
-              <span class="tag tag-out">→ {{ agent.output_file }}</span>
-              <span v-if="agent.upstream?.length" class="tag tag-up">
-                依赖: {{ agent.upstream.join(', ') }}
-              </span>
-            </div>
-            <div class="agent-prompt">
-              <template v-if="agent.prompt">
-                <span class="prompt-path">{{ agent.prompt }}</span>
-                <button class="btn-link" @click="openPromptEditor(agent.prompt!)">编辑指令</button>
-              </template>
-              <template v-else-if="agent.prompts">
-                <div v-for="(path, key) in agent.prompts" :key="key" class="prompt-multi-row">
-                  <span class="prompt-key">{{ key }}:</span>
-                  <span class="prompt-path">{{ path }}</span>
-                  <button class="btn-link" @click="openPromptEditor(path)">编辑</button>
-                </div>
-              </template>
-              <span v-else class="no-prompt">未配置指令</span>
-            </div>
+            <NEmpty v-if="config.agents.length === 0" description="还没有 Agent，点击新增" />
+
+            <NList v-else bordered>
+              <NListItem v-for="(agent, idx) in config.agents" :key="agent.id">
+                <NThing>
+                  <template #avatar>
+                    <div style="width:28px;height:28px;border-radius:50%;background:#ede9fe;color:#6d28d9;
+                                display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;">
+                      {{ idx + 1 }}
+                    </div>
+                  </template>
+                  <template #header>
+                    <NSpace align="center" :size="6">
+                      <NText strong>{{ agent.name }}</NText>
+                      <NTag size="small" type="info">{{ agent.id }}</NTag>
+                      <NTag size="small" type="warning">{{ agent.runtime }}</NTag>
+                      <NTag size="small" type="success">→ {{ agent.output_file }}</NTag>
+                      <NTag v-if="agent.upstream?.length" size="small">
+                        依赖: {{ agent.upstream.join(', ') }}
+                      </NTag>
+                    </NSpace>
+                  </template>
+                  <template #description>
+                    <div style="font-size:12px;color:#888;font-family:monospace;margin-top:4px;">
+                      <template v-if="agent.prompt">{{ agent.prompt }}</template>
+                      <template v-else-if="agent.prompts">
+                        <span v-for="(path, key) in agent.prompts" :key="key" style="margin-right:12px;">
+                          <NText type="info" style="font-size:11px;">{{ key }}:</NText> {{ path }}
+                        </span>
+                      </template>
+                      <span v-else style="color:#ccc;">未配置指令</span>
+                    </div>
+                  </template>
+                  <template #header-extra>
+                    <NSpace>
+                      <NButton size="small" @click="openEditAgent(agent)">✎ 编辑</NButton>
+                      <NButton size="small" type="error" ghost @click="deleteAgent(idx)">✕</NButton>
+                    </NSpace>
+                  </template>
+                </NThing>
+              </NListItem>
+            </NList>
           </div>
-          <div class="agent-actions">
-            <button class="btn-icon" @click="openEditAgent(agent)" title="编辑">✎</button>
-            <button class="btn-icon danger" @click="deleteAgent(idx)" title="删除">✕</button>
-          </div>
-        </div>
-        <div v-if="config.agents.length === 0" class="empty">还没有 Agent，点击右上角新增</div>
-      </div>
-    </div>
+        </NTabPane>
 
-    <!-- ─── 运行时列表 ──────────────────────────────────── -->
-    <div v-if="activeTab === 'runtimes'" class="section">
-      <div class="section-header">
-        <p class="section-tip">配置 CLI 运行时（claude、codex 等）。Agent 在此选择使用哪个运行时。</p>
-        <div class="header-btns">
-          <button class="btn-secondary" @click="runDetect">
-            {{ detecting ? '检测中...' : '🔍 自动检测' }}
-          </button>
-          <button class="btn-secondary" @click="openAddRuntime">+ 手动新增</button>
-        </div>
-      </div>
+        <!-- ─── 全局基础层 ─── -->
+        <NTabPane name="global" tab="全局基础层">
+          <div style="padding: 16px 0;">
+            <NSpace justify="space-between" align="center" style="margin-bottom: 14px;">
+              <NText depth="3" style="font-size:13px;">
+                每次对话都会将以下文件<strong>按顺序</strong>注入到系统提示最前面（如 constitution.md、AGENTS.md）
+              </NText>
+              <NButton @click="addBasePrompt">+ 添加文件</NButton>
+            </NSpace>
 
-      <div class="runtime-list">
-        <div v-for="(rt, idx) in config.runtimes" :key="rt.id" class="runtime-card">
-          <div class="runtime-info">
-            <span class="runtime-id">{{ rt.id }}</span>
-            <span class="tag">{{ rt.type }}</span>
-            <code class="runtime-cmd">{{ rt.command }}</code>
-          </div>
-          <div class="agent-actions">
-            <button class="btn-icon" @click="openEditRuntime(rt)" title="编辑">✎</button>
-            <button class="btn-icon danger" @click="deleteRuntime(idx)" title="删除">✕</button>
-          </div>
-        </div>
-        <div v-if="config.runtimes.length === 0" class="empty">
-          还没有运行时，点击"自动检测"从本机发现可用工具
-        </div>
-      </div>
-    </div>
-
-    <!-- ─── 自动检测结果弹窗 ──────────────────────────── -->
-    <div v-if="detectModal" class="modal-overlay" @click.self="detectModal = false">
-      <div class="modal modal-wide">
-        <h2>本机运行时检测</h2>
-
-        <div v-if="detecting" class="detect-loading">
-          <span class="spinner" />
-          正在扫描本机已安装的 AI CLI 工具...
-        </div>
-
-        <template v-else>
-          <div class="detect-list">
-            <div
-              v-for="rt in detectedList"
-              :key="rt.id"
-              class="detect-item"
-              :class="{ unavailable: !rt.available }"
-            >
-              <div class="detect-left">
-                <span class="detect-status" :title="rt.available ? '可用' : '未检测到'">
-                  {{ rt.available ? '✓' : '✗' }}
-                </span>
-                <div class="detect-info">
-                  <div class="detect-name">
-                    <strong>{{ rt.id }}</strong>
-                    <span class="tag">{{ rt.type }}</span>
-                    <span v-if="rt.source === 'daemon'" class="tag tag-daemon">
-                      daemon :{{ rt.daemonPort }}
-                      <span v-if="rt.daemonRunning" class="dot-green" title="daemon 运行中" />
-                      <span v-else class="dot-gray" title="daemon 未运行" />
-                    </span>
-                  </div>
-                  <div class="detect-sub">
-                    <code>{{ rt.command }}</code>
-                    <span v-if="rt.version" class="detect-version">{{ rt.version }}</span>
-                    <span v-else-if="!rt.available" class="detect-miss">未在 PATH 中找到</span>
-                  </div>
+            <div style="display:flex;gap:0;border:1px solid #efeff5;border-radius:8px;overflow:hidden;height:calc(100vh - 200px);">
+              <!-- 左：文件列表 -->
+              <div style="width:300px;flex-shrink:0;border-right:1px solid #efeff5;overflow-y:auto;">
+                <NEmpty v-if="config.global.base_prompts.length === 0" description="未配置" style="padding:32px 0;" />
+                <div v-for="(filePath, idx) in config.global.base_prompts" :key="idx"
+                  :style="{
+                    display:'flex',alignItems:'center',gap:'8px',padding:'10px 12px',
+                    cursor:'pointer',borderBottom:'1px solid #f5f5f5',
+                    background: globalPreviewIdx === idx ? '#f0f0ff' : 'transparent',
+                  }"
+                  @click="loadGlobalPreview(idx)"
+                >
+                  <div :style="{
+                    width:'20px',height:'20px',borderRadius:'50%',flexShrink:0,
+                    display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',fontWeight:'700',
+                    background: globalPreviewIdx === idx ? '#6366f1' : '#e5e5e5',
+                    color: globalPreviewIdx === idx ? '#fff' : '#666',
+                  }">{{ idx + 1 }}</div>
+                  <input
+                    v-model="config.global.base_prompts[idx]"
+                    style="flex:1;border:none;background:transparent;font-size:12px;font-family:monospace;color:#374151;outline:none;padding:0;"
+                    placeholder="文件路径（相对项目根）"
+                    @click.stop
+                    @change="globalPreviewIdx === idx && loadGlobalPreview(idx)"
+                  />
+                  <NButton size="tiny" type="error" ghost @click.stop="removeBasePrompt(idx)">✕</NButton>
                 </div>
               </div>
-              <button
-                v-if="rt.available"
-                class="btn-secondary btn-sm"
-                :class="{ 'already-added': config.runtimes.some(r => r.id === rt.id) }"
-                @click="addDetected(rt)"
-              >
-                {{ config.runtimes.some(r => r.id === rt.id) ? '已添加（更新）' : '+ 添加' }}
-              </button>
+
+              <!-- 右：编辑器 -->
+              <div style="flex:1;display:flex;flex-direction:column;background:#1e1e2e;">
+                <div v-if="globalPreviewIdx === null"
+                  style="flex:1;display:flex;align-items:center;justify-content:center;color:#555;font-size:14px;">
+                  ← 点击左侧文件查看/编辑内容
+                </div>
+                <template v-else>
+                  <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 16px;border-bottom:1px solid #2d2d3f;background:#1a1a2e;">
+                    <code style="font-size:11px;color:#94a3b8;">{{ config.global.base_prompts[globalPreviewIdx] }}</code>
+                    <NButton size="small" type="primary" :loading="globalPreviewSaving" @click="saveGlobalPreview">
+                      保存文件
+                    </NButton>
+                  </div>
+                  <div style="flex:1;overflow:hidden;">
+                    <MarkdownEditor v-model="globalPreviewContent" style="height:100%;border-radius:0;border:none;" />
+                  </div>
+                </template>
+              </div>
             </div>
           </div>
+        </NTabPane>
 
-          <div v-if="detectedList.filter(r => r.available).length === 0" class="empty">
-            未检测到可用的 AI CLI 工具
+        <!-- ─── 运行时 ─── -->
+        <NTabPane name="runtimes" tab="运行时">
+          <div style="padding: 16px 0;">
+            <NSpace justify="space-between" align="center" style="margin-bottom: 14px;">
+              <NText depth="3" style="font-size:13px;">配置 CLI 运行时（claude、codex 等）。Agent 在此选择使用哪个运行时。</NText>
+              <NSpace>
+                <NButton @click="runDetect">🔍 自动检测</NButton>
+                <NButton @click="openAddRuntime">+ 手动新增</NButton>
+              </NSpace>
+            </NSpace>
+
+            <NEmpty v-if="config.runtimes.length === 0"
+              description="还没有运行时，点击「自动检测」从本机发现可用工具" />
+
+            <NList v-else bordered>
+              <NListItem v-for="(rt, idx) in config.runtimes" :key="rt.id">
+                <NThing>
+                  <template #header>
+                    <NSpace align="center" :size="8">
+                      <NText strong>{{ rt.id }}</NText>
+                      <NTag size="small">{{ rt.type }}</NTag>
+                      <code style="font-size:12px;background:#f0f0f5;padding:2px 8px;border-radius:4px;">{{ rt.command }}</code>
+                    </NSpace>
+                  </template>
+                  <template #header-extra>
+                    <NSpace>
+                      <NButton size="small" @click="openEditRuntime(rt)">✎ 编辑</NButton>
+                      <NButton size="small" type="error" ghost @click="deleteRuntime(idx)">✕</NButton>
+                    </NSpace>
+                  </template>
+                </NThing>
+              </NListItem>
+            </NList>
+          </div>
+        </NTabPane>
+
+      </NTabs>
+    </NLayoutContent>
+  </NLayout>
+
+  <!-- ─── 自动检测弹窗 ─── -->
+  <NModal v-model:show="detectModal" preset="card" title="本机运行时检测" style="width: 600px;">
+    <div v-if="detecting" style="display:flex;align-items:center;gap:12px;padding:24px 0;">
+      <NSpin size="small" />
+      <NText depth="3">正在扫描本机已安装的 AI CLI 工具...</NText>
+    </div>
+    <template v-else>
+      <NEmpty v-if="detectedList.length === 0" description="未检测到可用工具" />
+      <NList v-else bordered style="max-height:360px;overflow-y:auto;">
+        <NListItem v-for="rt in detectedList" :key="rt.id" :style="{ opacity: rt.available ? 1 : 0.5 }">
+          <NThing>
+            <template #avatar>
+              <NTag :type="rt.available ? 'success' : 'error'" size="small" round>
+                {{ rt.available ? '✓' : '✗' }}
+              </NTag>
+            </template>
+            <template #header>
+              <NSpace align="center" :size="6">
+                <NText strong>{{ rt.id }}</NText>
+                <NTag size="small">{{ rt.type }}</NTag>
+                <NTag v-if="rt.source === 'daemon'" size="small" type="warning">
+                  daemon :{{ rt.daemonPort }}
+                  <span :style="{ display:'inline-block',width:'7px',height:'7px',borderRadius:'50%',
+                    background:rt.daemonRunning?'#18a058':'#aaa',marginLeft:'4px' }" />
+                </NTag>
+              </NSpace>
+            </template>
+            <template #description>
+              <NSpace :size="8">
+                <code style="font-size:12px;">{{ rt.command }}</code>
+                <NText v-if="rt.version" type="success" style="font-size:12px;">{{ rt.version }}</NText>
+                <NText v-else-if="!rt.available" type="error" style="font-size:12px;">未在 PATH 中找到</NText>
+              </NSpace>
+            </template>
+            <template #header-extra>
+              <NButton v-if="rt.available" size="small"
+                :type="config.runtimes.some(r => r.id === rt.id) ? 'default' : 'primary'"
+                @click="addDetected(rt)">
+                {{ config.runtimes.some(r => r.id === rt.id) ? '已添加（更新）' : '+ 添加' }}
+              </NButton>
+            </template>
+          </NThing>
+        </NListItem>
+      </NList>
+    </template>
+    <template #footer>
+      <NSpace justify="end">
+        <NButton @click="detectModal = false">关闭</NButton>
+        <NButton v-if="detectedList.some(r => r.available)" type="primary" @click="addAllDetected">
+          全部添加（{{ detectedList.filter(r => r.available).length }} 个）
+        </NButton>
+      </NSpace>
+    </template>
+  </NModal>
+
+  <!-- ─── 运行时编辑弹窗 ─── -->
+  <NModal v-model:show="runtimeModal" preset="card"
+    :title="editingRuntime ? '编辑运行时' : '新增运行时'" style="width: 440px;">
+    <NForm label-placement="top" :show-feedback="false">
+      <NFormItem label="ID *">
+        <NInput v-model:value="runtimeForm.id" placeholder="如 claude、codex" :disabled="!!editingRuntime" />
+      </NFormItem>
+      <NFormItem label="类型">
+        <NInput v-model:value="runtimeForm.type" placeholder="如 claude-cli、openai-cli" />
+      </NFormItem>
+      <NFormItem label="CLI 命令">
+        <NInput v-model:value="runtimeForm.command" placeholder="如 claude" />
+      </NFormItem>
+    </NForm>
+    <template #footer>
+      <NSpace justify="end">
+        <NButton @click="runtimeModal = false">取消</NButton>
+        <NButton type="primary" :disabled="!runtimeForm.id.trim()" @click="saveRuntime">保存</NButton>
+      </NSpace>
+    </template>
+  </NModal>
+
+  <!-- ─── Agent 编辑弹窗（左右分栏）─── -->
+  <NModal v-model:show="agentModal" :show-icon="false"
+    style="width:90vw;max-width:1100px;height:82vh;padding:0;overflow:hidden;">
+    <div style="display:flex;height:82vh;overflow:hidden;">
+      <!-- 左：配置区 -->
+      <div style="width:340px;flex-shrink:0;display:flex;flex-direction:column;border-right:1px solid #efeff5;overflow-y:auto;padding:20px;gap:12px;">
+        <NText strong style="font-size:15px;">{{ editingAgent ? '编辑 Agent' : '新增 Agent' }}</NText>
+
+        <NForm label-placement="top" :show-feedback="false" style="gap:10px;display:flex;flex-direction:column;">
+          <div style="display:flex;gap:10px;">
+            <NFormItem label="ID *" style="flex:1;">
+              <NInput v-model:value="agentForm.id" placeholder="如 spec" :disabled="!!editingAgent" />
+            </NFormItem>
+            <NFormItem label="名称 *" style="flex:1;">
+              <NInput v-model:value="agentForm.name" placeholder="如 Spec Agent" />
+            </NFormItem>
           </div>
 
-          <div class="modal-actions">
-            <button class="btn-secondary" @click="detectModal = false">关闭</button>
-            <button
-              v-if="detectedList.some(r => r.available)"
-              class="btn-primary"
-              @click="addAllDetected"
-            >
-              全部添加（{{ detectedList.filter(r => r.available).length }} 个）
-            </button>
+          <div style="display:flex;gap:10px;">
+            <NFormItem label="运行时" style="flex:1;">
+              <NSelect v-model:value="agentForm.runtime" :options="runtimeOptions" />
+            </NFormItem>
+            <NFormItem label="输出文件" style="flex:1;">
+              <NInput v-model:value="agentForm.output_file" placeholder="如 spec.md" />
+            </NFormItem>
           </div>
-        </template>
+
+          <NFormItem label="上游依赖">
+            <NSpace wrap>
+              <NCheckbox
+                v-for="aid in agentIds.filter(id => id !== agentForm.id)"
+                :key="aid"
+                :checked="agentForm.upstream.includes(aid)"
+                @update:checked="toggleUpstream(aid)"
+              >{{ aid }}</NCheckbox>
+              <NText v-if="!agentIds.filter(id => id !== agentForm.id).length" depth="3" style="font-size:12px;">无其他 Agent</NText>
+            </NSpace>
+          </NFormItem>
+
+          <NFormItem label="指令模式">
+            <NRadioGroup v-model:value="agentForm.promptMode">
+              <NSpace>
+                <NRadio value="single" @click="loadInlinePrompt(agentForm.prompt ?? '')">单一文件</NRadio>
+                <NRadio value="multi" @click="() => { inlinePromptContent = ''; activeMultiIdx = null }">按技术栈</NRadio>
+              </NSpace>
+            </NRadioGroup>
+          </NFormItem>
+
+          <!-- single 模式 -->
+          <template v-if="agentForm.promptMode === 'single'">
+            <NFormItem label="指令文件路径">
+              <NSpace :wrap="false">
+                <NInput v-model:value="agentForm.prompt" placeholder="SDDInAction/2.spec/spec-prompt.md" style="flex:1;" />
+                <NButton size="small" @click="openFilePicker('single')">浏览</NButton>
+              </NSpace>
+            </NFormItem>
+          </template>
+
+          <!-- multi 模式 -->
+          <template v-else>
+            <NFormItem label="技术栈 → 指令文件">
+              <div style="display:flex;flex-direction:column;gap:6px;width:100%;">
+                <div v-for="(entry, idx) in multiPromptEntries" :key="idx" style="display:flex;gap:4px;align-items:center;">
+                  <NInput v-model:value="entry.key" placeholder="ts" style="width:60px;flex-shrink:0;" />
+                  <span style="color:#aaa;font-size:12px;">→</span>
+                  <NInput v-model:value="entry.value" placeholder="文件路径" style="flex:1;" />
+                  <NButton size="tiny" @click="openFilePicker(idx)">浏览</NButton>
+                  <NButton size="tiny"
+                    :type="activeMultiIdx === idx ? 'primary' : 'default'"
+                    @click="selectMultiEntry(idx)">✎</NButton>
+                  <NButton size="tiny" type="error" ghost @click="removeMultiEntry(idx)">✕</NButton>
+                </div>
+                <NButton text style="font-size:12px;" @click="addMultiEntry">+ 添加技术栈</NButton>
+              </div>
+            </NFormItem>
+          </template>
+        </NForm>
+
+        <div style="margin-top:auto;padding-top:12px;">
+          <NSpace justify="end">
+            <NButton @click="agentModal = false">取消</NButton>
+            <NButton type="primary"
+              :disabled="!agentForm.id.trim() || !agentForm.name.trim()"
+              @click="saveAgent">保存 Agent</NButton>
+          </NSpace>
+        </div>
+      </div>
+
+      <!-- 右：指令内容编辑器 -->
+      <div style="flex:1;display:flex;flex-direction:column;overflow:hidden;background:#1e1e2e;">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 16px;border-bottom:1px solid #2d2d3f;background:#1a1a2e;flex-shrink:0;">
+          <NText style="color:#94a3b8;font-size:13px;">
+            指令内容
+            <span v-if="agentForm.promptMode === 'multi' && activeMultiIdx !== null" style="color:#818cf8;margin-left:4px;">
+              [{{ multiPromptEntries[activeMultiIdx!]?.key || '未命名' }}]
+            </span>
+          </NText>
+          <NButton size="small" type="primary"
+            :loading="inlinePromptSaving"
+            :disabled="!inlinePromptContent"
+            @click="saveInlinePrompt">保存文件</NButton>
+        </div>
+        <div style="flex:1;overflow:hidden;">
+          <div v-if="agentForm.promptMode === 'multi' && activeMultiIdx === null"
+            style="height:100%;display:flex;align-items:center;justify-content:center;color:#555;font-size:14px;">
+            ← 点击左侧 ✎ 按钮编辑对应技术栈的指令文件
+          </div>
+          <MarkdownEditor v-else v-model="inlinePromptContent" style="height:100%;border-radius:0;border:none;" />
+        </div>
       </div>
     </div>
+  </NModal>
 
-    <!-- ─── 运行时编辑弹窗 ─────────────────────────────── -->
-    <div v-if="runtimeModal" class="modal-overlay" @click.self="runtimeModal = false">
-      <div class="modal">
-        <h2>{{ editingRuntime ? '编辑运行时' : '新增运行时' }}</h2>
-
-        <label>ID *</label>
-        <input v-model="runtimeForm.id" placeholder="如 claude、codex" :disabled="!!editingRuntime" />
-
-        <label>类型</label>
-        <input v-model="runtimeForm.type" placeholder="如 claude-cli、openai-cli" />
-
-        <label>CLI 命令</label>
-        <input v-model="runtimeForm.command" placeholder="如 claude" />
-
-        <div class="modal-actions">
-          <button class="btn-secondary" @click="runtimeModal = false">取消</button>
-          <button class="btn-primary" :disabled="!runtimeForm.id.trim()" @click="saveRuntime">
-            保存
-          </button>
-        </div>
-      </div>
+  <!-- ─── 文件浏览器弹窗 ─── -->
+  <NModal v-model:show="filePickerOpen" preset="card" title="选择提示词文件" style="width: 580px;">
+    <NInput v-model:value="filePickerFilter" placeholder="输入关键字过滤..." style="margin-bottom:10px;" />
+    <div style="border:1px solid #efeff5;border-radius:6px;max-height:320px;overflow-y:auto;">
+      <NEmpty v-if="filteredFiles.length === 0" description="无匹配文件" style="padding:24px 0;" />
+      <div v-for="f in filteredFiles" :key="f"
+        style="padding:8px 12px;cursor:pointer;font-size:12px;font-family:monospace;color:#374151;border-bottom:1px solid #f5f5f5;"
+        @click="selectFile(f)"
+        @mouseover="($event.target as HTMLElement).style.background='#f0f0ff'"
+        @mouseleave="($event.target as HTMLElement).style.background='transparent'"
+      >{{ f }}</div>
     </div>
-
-    <!-- ─── Agent 编辑弹窗 ────────────────────────────── -->
-    <div v-if="agentModal" class="modal-overlay" @click.self="agentModal = false">
-      <div class="modal modal-wide">
-        <h2>{{ editingAgent ? '编辑 Agent' : '新增 Agent' }}</h2>
-
-        <div class="form-row">
-          <div class="form-col">
-            <label>ID *</label>
-            <input v-model="agentForm.id" placeholder="如 spec、plan" :disabled="!!editingAgent" />
-          </div>
-          <div class="form-col">
-            <label>名称 *</label>
-            <input v-model="agentForm.name" placeholder="如 Spec Agent" />
-          </div>
-        </div>
-
-        <div class="form-row">
-          <div class="form-col">
-            <label>运行时</label>
-            <select v-model="agentForm.runtime">
-              <option v-for="rt in runtimeIds" :key="rt" :value="rt">{{ rt }}</option>
-            </select>
-          </div>
-          <div class="form-col">
-            <label>输出文件</label>
-            <input v-model="agentForm.output_file" placeholder="如 spec.md" />
-          </div>
-        </div>
-
-        <label>上游依赖（依赖的 Agent 产物会注入系统提示）</label>
-        <div class="upstream-checks">
-          <label
-            v-for="aid in agentIds.filter(id => id !== agentForm.id)"
-            :key="aid"
-            class="check-label"
-          >
-            <input
-              type="checkbox"
-              :checked="agentForm.upstream.includes(aid)"
-              @change="toggleUpstream(aid)"
-            />
-            {{ aid }}
-          </label>
-          <span v-if="agentIds.filter(id => id !== agentForm.id).length === 0" class="muted">
-            无其他 Agent 可选
-          </span>
-        </div>
-
-        <!-- 指令配置 -->
-        <label>指令模式</label>
-        <div class="radio-group">
-          <label class="radio-label">
-            <input type="radio" v-model="agentForm.promptMode" value="single" />
-            单一指令文件（不区分技术栈）
-          </label>
-          <label class="radio-label">
-            <input type="radio" v-model="agentForm.promptMode" value="multi" />
-            按技术栈配置（ts / java / python 等）
-          </label>
-        </div>
-
-        <!-- 单一模式 -->
-        <template v-if="agentForm.promptMode === 'single'">
-          <label>指令文件路径（相对项目根）</label>
-          <div class="file-input-row">
-            <input v-model="agentForm.prompt" placeholder="如 SDDInAction/2.spec/spec-prompt.md" />
-            <button class="btn-secondary btn-sm" @click="openFilePicker('single')">浏览</button>
-            <button
-              class="btn-secondary btn-sm"
-              :disabled="!agentForm.prompt?.trim()"
-              @click="openPromptEditor(agentForm.prompt!)"
-            >
-              编辑内容
-            </button>
-          </div>
-        </template>
-
-        <!-- 多技术栈模式 -->
-        <template v-else>
-          <label>技术栈 → 指令文件路径</label>
-          <div
-            v-for="(entry, idx) in multiPromptEntries"
-            :key="idx"
-            class="multi-entry-row"
-          >
-            <input v-model="entry.key" placeholder="技术栈（如 ts、java）" class="key-input" />
-            <span>→</span>
-            <input v-model="entry.value" placeholder="文件路径" class="flex-1" />
-            <button class="btn-secondary btn-sm" @click="openFilePicker(idx)">浏览</button>
-            <button
-              class="btn-secondary btn-sm"
-              :disabled="!entry.value.trim()"
-              @click="openPromptEditor(entry.value)"
-            >
-              编辑
-            </button>
-            <button class="btn-icon danger" @click="removeMultiEntry(idx)">✕</button>
-          </div>
-          <button class="btn-link" @click="addMultiEntry">+ 添加技术栈</button>
-        </template>
-
-        <div class="modal-actions">
-          <button class="btn-secondary" @click="agentModal = false">取消</button>
-          <button
-            class="btn-primary"
-            :disabled="!agentForm.id.trim() || !agentForm.name.trim()"
-            @click="saveAgent"
-          >
-            保存
-          </button>
-        </div>
-      </div>
-    </div>
-
-    <!-- ─── 文件浏览器弹窗 ─────────────────────────────── -->
-    <div v-if="filePickerOpen" class="modal-overlay" @click.self="filePickerOpen = false">
-      <div class="modal modal-wide">
-        <h2>选择提示词文件</h2>
-        <input
-          v-model="filePickerFilter"
-          class="filter-input"
-          placeholder="输入关键字过滤..."
-          autofocus
-        />
-        <div class="file-list">
-          <div
-            v-for="f in filteredFiles"
-            :key="f"
-            class="file-item"
-            @click="selectFile(f)"
-          >
-            {{ f }}
-          </div>
-          <div v-if="filteredFiles.length === 0" class="empty">无匹配文件</div>
-        </div>
-        <div class="modal-actions">
-          <button class="btn-secondary" @click="filePickerOpen = false">取消</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- ─── MD 指令编辑器弹窗 ──────────────────────────── -->
-    <div v-if="promptEditor" class="modal-overlay" @click.self="promptEditor = false">
-      <div class="modal modal-full">
-        <div class="prompt-editor-header">
-          <div>
-            <h2>编辑指令文件</h2>
-            <code class="prompt-file-path">{{ promptEditorFile }}</code>
-          </div>
-          <div class="prompt-editor-actions">
-            <button class="btn-secondary" @click="promptEditor = false">取消</button>
-            <button class="btn-primary" :disabled="promptEditorSaving" @click="savePromptEditor">
-              {{ promptEditorSaving ? '保存中...' : '保存文件' }}
-            </button>
-          </div>
-        </div>
-        <textarea
-          v-model="promptEditorContent"
-          class="prompt-textarea"
-          placeholder="输入 Markdown 格式的 Agent 指令..."
-          spellcheck="false"
-        />
-      </div>
-    </div>
-  </div>
+    <template #footer>
+      <NSpace justify="end">
+        <NButton @click="filePickerOpen = false">取消</NButton>
+      </NSpace>
+    </template>
+  </NModal>
 </template>
-
-<style scoped>
-.config-view { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
-
-/* 顶栏 */
-.topbar {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 14px 24px; border-bottom: 1px solid #e2e8f0;
-  background: #fff; flex-shrink: 0;
-}
-.topbar-left { display: flex; align-items: center; gap: 16px; }
-.topbar h1 { font-size: 1.1rem; font-weight: 700; color: #1a1a2e; }
-.back-link { color: #6366f1; cursor: pointer; font-size: 0.9rem; }
-.back-link:hover { text-decoration: underline; }
-.topbar-right { display: flex; align-items: center; gap: 10px; }
-.save-msg { font-size: 0.85rem; color: #16a34a; }
-.save-msg.error { color: #dc2626; }
-
-/* 标签页 */
-.tabs {
-  display: flex; gap: 0; border-bottom: 1px solid #e2e8f0;
-  background: #f8fafc; flex-shrink: 0; padding: 0 24px;
-}
-.tab {
-  padding: 10px 20px; border: none; background: none; cursor: pointer;
-  font-size: 0.9rem; color: #64748b; border-bottom: 2px solid transparent; margin-bottom: -1px;
-}
-.tab.active { color: #6366f1; border-bottom-color: #6366f1; font-weight: 600; }
-
-/* 区域 */
-.section { flex: 1; overflow-y: auto; padding: 20px 24px; }
-.section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
-.header-btns { display: flex; gap: 8px; }
-.section-tip { font-size: 0.85rem; color: #64748b; }
-.empty { text-align: center; color: #94a3b8; padding: 40px 0; font-size: 0.9rem; }
-
-/* Agent 卡片 */
-.agent-list { display: flex; flex-direction: column; gap: 8px; }
-.agent-card {
-  border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px 16px;
-  display: flex; align-items: flex-start; gap: 12px; background: #fff;
-}
-.agent-order {
-  width: 28px; height: 28px; border-radius: 50%; background: #ede9fe; color: #6d28d9;
-  display: flex; align-items: center; justify-content: center; font-size: 0.85rem;
-  font-weight: 700; flex-shrink: 0; margin-top: 2px;
-}
-.agent-info { flex: 1; min-width: 0; }
-.agent-name { font-weight: 600; font-size: 0.95rem; margin-bottom: 6px; }
-.agent-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
-.tag {
-  background: #f1f5f9; color: #475569; padding: 2px 8px;
-  border-radius: 4px; font-size: 0.75rem;
-}
-.tag-runtime { background: #ede9fe; color: #6d28d9; }
-.tag-out { background: #dcfce7; color: #15803d; }
-.tag-up { background: #fef3c7; color: #92400e; }
-.agent-prompt { font-size: 0.8rem; color: #64748b; }
-.prompt-path { color: #475569; font-family: monospace; }
-.prompt-multi-row { display: flex; gap: 8px; align-items: center; margin-bottom: 2px; }
-.prompt-key { color: #6366f1; font-weight: 600; font-family: monospace; }
-.no-prompt { color: #94a3b8; font-style: italic; }
-.agent-actions { display: flex; gap: 6px; flex-shrink: 0; }
-
-/* 运行时卡片 */
-.runtime-list { display: flex; flex-direction: column; gap: 8px; }
-.runtime-card {
-  border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px 16px;
-  display: flex; justify-content: space-between; align-items: center; background: #fff;
-}
-.runtime-info { display: flex; align-items: center; gap: 10px; }
-.runtime-id { font-weight: 700; font-size: 0.95rem; }
-.runtime-cmd { background: #f1f5f9; padding: 2px 8px; border-radius: 4px; font-size: 0.82rem; color: #0f172a; }
-
-/* 按钮 */
-.btn-primary {
-  background: #6366f1; color: #fff; border: none; padding: 8px 16px;
-  border-radius: 6px; cursor: pointer; font-size: 0.9rem;
-}
-.btn-primary:hover { background: #4f46e5; }
-.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn-secondary {
-  background: #f1f5f9; color: #475569; border: 1px solid #e2e8f0;
-  padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 0.9rem;
-}
-.btn-secondary:hover { background: #e2e8f0; }
-.btn-sm { padding: 5px 10px; font-size: 0.8rem; }
-.btn-icon {
-  background: none; border: 1px solid #e2e8f0; padding: 4px 8px;
-  border-radius: 4px; cursor: pointer; color: #64748b; font-size: 0.85rem;
-}
-.btn-icon:hover { background: #f1f5f9; }
-.btn-icon.danger { color: #dc2626; }
-.btn-icon.danger:hover { background: #fef2f2; border-color: #fecaca; }
-.btn-link { background: none; border: none; color: #6366f1; cursor: pointer; font-size: 0.82rem; padding: 0; }
-.btn-link:hover { text-decoration: underline; }
-
-/* 弹窗 */
-.modal-overlay {
-  position: fixed; inset: 0; background: rgba(0,0,0,0.45);
-  display: flex; align-items: center; justify-content: center; z-index: 200;
-}
-.modal {
-  background: #fff; border-radius: 12px; padding: 24px; width: 460px;
-  max-height: 85vh; overflow-y: auto;
-  display: flex; flex-direction: column; gap: 10px;
-}
-.modal-wide { width: 620px; }
-.modal-full { width: 80vw; max-width: 960px; height: 80vh; max-height: 80vh; }
-.modal h2 { font-size: 1rem; font-weight: 700; margin-bottom: 4px; }
-.modal label { font-size: 0.82rem; color: #64748b; }
-.modal input, .modal select, .modal textarea {
-  border: 1px solid #e2e8f0; border-radius: 6px; padding: 7px 10px;
-  font-size: 0.88rem; width: 100%; box-sizing: border-box; outline: none;
-}
-.modal input:focus, .modal select:focus { border-color: #6366f1; }
-.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
-
-/* 表单布局 */
-.form-row { display: flex; gap: 12px; }
-.form-col { flex: 1; display: flex; flex-direction: column; gap: 4px; }
-
-/* 上游依赖 */
-.upstream-checks { display: flex; flex-wrap: wrap; gap: 8px; }
-.check-label { display: flex; align-items: center; gap: 4px; font-size: 0.85rem; cursor: pointer; }
-.muted { font-size: 0.82rem; color: #94a3b8; }
-
-/* 指令模式 */
-.radio-group { display: flex; flex-direction: column; gap: 6px; }
-.radio-label { display: flex; align-items: center; gap: 6px; font-size: 0.88rem; cursor: pointer; }
-
-/* 文件选择行 */
-.file-input-row { display: flex; gap: 6px; align-items: center; }
-.file-input-row input { flex: 1; }
-
-/* 多技术栈行 */
-.multi-entry-row { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
-.key-input { width: 100px; flex-shrink: 0; }
-.flex-1 { flex: 1; }
-
-/* 文件浏览器 */
-.filter-input { margin-bottom: 8px; }
-.file-list { max-height: 320px; overflow-y: auto; border: 1px solid #e2e8f0; border-radius: 6px; }
-.file-item {
-  padding: 8px 12px; cursor: pointer; font-size: 0.82rem; font-family: monospace;
-  border-bottom: 1px solid #f1f5f9; color: #374151;
-}
-.file-item:last-child { border-bottom: none; }
-.file-item:hover { background: #ede9fe; color: #4f46e5; }
-
-/* Prompt 编辑器 */
-.prompt-editor-header {
-  display: flex; justify-content: space-between; align-items: flex-start;
-  margin-bottom: 10px; flex-shrink: 0;
-}
-.prompt-file-path { font-size: 0.78rem; color: #64748b; display: block; margin-top: 2px; }
-.prompt-editor-actions { display: flex; gap: 8px; }
-.prompt-textarea {
-  flex: 1; border: 1px solid #e2e8f0; border-radius: 6px; padding: 12px;
-  font-size: 0.875rem; font-family: 'Courier New', Consolas, monospace;
-  resize: none; outline: none; line-height: 1.6; color: #1e293b;
-  min-height: 0;
-}
-.prompt-textarea:focus { border-color: #6366f1; }
-
-/* 自动检测弹窗 */
-.detect-loading {
-  display: flex; align-items: center; gap: 12px; padding: 24px 0;
-  color: #64748b; font-size: 0.9rem;
-}
-.spinner {
-  width: 18px; height: 18px; border: 2px solid #e2e8f0;
-  border-top-color: #6366f1; border-radius: 50%;
-  animation: spin 0.8s linear infinite; flex-shrink: 0;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
-
-.detect-list { display: flex; flex-direction: column; gap: 8px; max-height: 380px; overflow-y: auto; }
-.detect-item {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 12px 14px; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff;
-}
-.detect-item.unavailable { opacity: 0.5; background: #fafafa; }
-.detect-left { display: flex; align-items: center; gap: 10px; }
-.detect-status {
-  width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center;
-  justify-content: center; font-size: 0.75rem; font-weight: 700; flex-shrink: 0;
-  background: #dcfce7; color: #16a34a;
-}
-.detect-item.unavailable .detect-status { background: #fee2e2; color: #dc2626; }
-.detect-info { display: flex; flex-direction: column; gap: 3px; }
-.detect-name { display: flex; align-items: center; gap: 6px; font-size: 0.9rem; }
-.detect-sub { display: flex; align-items: center; gap: 8px; font-size: 0.8rem; color: #64748b; }
-.detect-version { color: #16a34a; font-size: 0.75rem; }
-.detect-miss { color: #dc2626; font-size: 0.75rem; }
-.tag-daemon { background: #fef3c7; color: #92400e; display: flex; align-items: center; gap: 4px; }
-.dot-green { width: 7px; height: 7px; border-radius: 50%; background: #16a34a; }
-.dot-gray  { width: 7px; height: 7px; border-radius: 50%; background: #94a3b8; }
-.already-added { border-color: #86efac; color: #15803d; background: #f0fdf4; }
-</style>

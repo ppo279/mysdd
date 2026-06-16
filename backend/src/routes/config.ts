@@ -29,8 +29,13 @@ const AgentSchema = z.object({
   upstream: z.array(z.string()).default([]),
 })
 
+const GlobalSchema = z.object({
+  base_prompts: z.array(z.string()).default([]),
+})
+
 const AgentsYamlSchema = z.object({
   runtimes: z.array(RuntimeSchema),
+  global: GlobalSchema.default({ base_prompts: [] }),
   agents: z.array(AgentSchema),
 })
 
