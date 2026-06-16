@@ -4,6 +4,7 @@ import path from 'path'
 import yaml from 'js-yaml'
 import { fileURLToPath } from 'url'
 import { z } from 'zod'
+import { detectRuntimes } from '../services/detect.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(__dirname, '../../..')
@@ -104,5 +105,10 @@ export async function configRoutes(app: FastifyInstance) {
 
     walk(sddDir)
     return files
+  })
+
+  // 检测本机可用的 AI CLI 运行时
+  app.get('/api/config/detect-runtimes', async () => {
+    return detectRuntimes()
   })
 }

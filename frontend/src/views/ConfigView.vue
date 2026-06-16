@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { api, type AgentsYamlRaw, type RuntimeRaw, type AgentRaw } from '@/api'
+import { api, type AgentsYamlRaw, type RuntimeRaw, type AgentRaw, type DetectedRuntime } from '@/api'
 
 const router = useRouter()
 
@@ -16,6 +16,39 @@ const activeTab = ref<'runtimes' | 'agents'>('agents')
 const runtimeModal = ref(false)
 const editingRuntime = ref<RuntimeRaw | null>(null)
 const runtimeForm = reactive<RuntimeRaw>({ id: '', type: 'claude-cli', command: 'claude' })
+
+// ─── 自动检测 ──────────────────────────────────────────
+const detecting = ref(false)
+const detectedList = ref<DetectedRuntime[]>([])
+const detectModal = ref(false)
+
+async function runDetect() {
+  detecting.value = true
+  detectModal.value = true
+  detectedList.value = []
+  try {
+    detectedList.value = await api.config.detectRuntimes()
+  } finally {
+    detecting.value = false
+  }
+}
+
+function addDetected(rt: DetectedRuntime) {
+  const exists = config.value.runtimes.find((r) => r.id === rt.id)
+  if (exists) {
+    // 覆盖更新
+    Object.assign(exists, { type: rt.type, command: rt.command })
+  } else {
+    config.value.runtimes.push({ id: rt.id, type: rt.type, command: rt.command })
+  }
+}
+
+function addAllDetected() {
+  for (const rt of detectedList.value.filter((r) => r.available)) {
+    addDetected(rt)
+  }
+  detectModal.value = false
+}
 
 // ─── Agent 编辑 ────────────────────────────────────────
 const agentModal = ref(false)
@@ -295,7 +328,12 @@ function openFilePicker(target: 'single' | number) {
     <div v-if="activeTab === 'runtimes'" class="section">
       <div class="section-header">
         <p class="section-tip">配置 CLI 运行时（claude、codex 等）。Agent 在此选择使用哪个运行时。</p>
-        <button class="btn-secondary" @click="openAddRuntime">+ 新增运行时</button>
+        <div class="header-btns">
+          <button class="btn-secondary" @click="runDetect">
+            {{ detecting ? '检测中...' : '🔍 自动检测' }}
+          </button>
+          <button class="btn-secondary" @click="openAddRuntime">+ 手动新增</button>
+        </div>
       </div>
 
       <div class="runtime-list">
@@ -310,7 +348,77 @@ function openFilePicker(target: 'single' | number) {
             <button class="btn-icon danger" @click="deleteRuntime(idx)" title="删除">✕</button>
           </div>
         </div>
-        <div v-if="config.runtimes.length === 0" class="empty">还没有运行时配置</div>
+        <div v-if="config.runtimes.length === 0" class="empty">
+          还没有运行时，点击"自动检测"从本机发现可用工具
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── 自动检测结果弹窗 ──────────────────────────── -->
+    <div v-if="detectModal" class="modal-overlay" @click.self="detectModal = false">
+      <div class="modal modal-wide">
+        <h2>本机运行时检测</h2>
+
+        <div v-if="detecting" class="detect-loading">
+          <span class="spinner" />
+          正在扫描本机已安装的 AI CLI 工具...
+        </div>
+
+        <template v-else>
+          <div class="detect-list">
+            <div
+              v-for="rt in detectedList"
+              :key="rt.id"
+              class="detect-item"
+              :class="{ unavailable: !rt.available }"
+            >
+              <div class="detect-left">
+                <span class="detect-status" :title="rt.available ? '可用' : '未检测到'">
+                  {{ rt.available ? '✓' : '✗' }}
+                </span>
+                <div class="detect-info">
+                  <div class="detect-name">
+                    <strong>{{ rt.id }}</strong>
+                    <span class="tag">{{ rt.type }}</span>
+                    <span v-if="rt.source === 'daemon'" class="tag tag-daemon">
+                      daemon :{{ rt.daemonPort }}
+                      <span v-if="rt.daemonRunning" class="dot-green" title="daemon 运行中" />
+                      <span v-else class="dot-gray" title="daemon 未运行" />
+                    </span>
+                  </div>
+                  <div class="detect-sub">
+                    <code>{{ rt.command }}</code>
+                    <span v-if="rt.version" class="detect-version">{{ rt.version }}</span>
+                    <span v-else-if="!rt.available" class="detect-miss">未在 PATH 中找到</span>
+                  </div>
+                </div>
+              </div>
+              <button
+                v-if="rt.available"
+                class="btn-secondary btn-sm"
+                :class="{ 'already-added': config.runtimes.some(r => r.id === rt.id) }"
+                @click="addDetected(rt)"
+              >
+                {{ config.runtimes.some(r => r.id === rt.id) ? '已添加（更新）' : '+ 添加' }}
+              </button>
+            </div>
+          </div>
+
+          <div v-if="detectedList.filter(r => r.available).length === 0" class="empty">
+            未检测到可用的 AI CLI 工具
+          </div>
+
+          <div class="modal-actions">
+            <button class="btn-secondary" @click="detectModal = false">关闭</button>
+            <button
+              v-if="detectedList.some(r => r.available)"
+              class="btn-primary"
+              @click="addAllDetected"
+            >
+              全部添加（{{ detectedList.filter(r => r.available).length }} 个）
+            </button>
+          </div>
+        </template>
       </div>
     </div>
 
@@ -535,6 +643,7 @@ function openFilePicker(target: 'single' | number) {
 /* 区域 */
 .section { flex: 1; overflow-y: auto; padding: 20px 24px; }
 .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+.header-btns { display: flex; gap: 8px; }
 .section-tip { font-size: 0.85rem; color: #64748b; }
 .empty { text-align: center; color: #94a3b8; padding: 40px 0; font-size: 0.9rem; }
 
@@ -666,4 +775,39 @@ function openFilePicker(target: 'single' | number) {
   min-height: 0;
 }
 .prompt-textarea:focus { border-color: #6366f1; }
+
+/* 自动检测弹窗 */
+.detect-loading {
+  display: flex; align-items: center; gap: 12px; padding: 24px 0;
+  color: #64748b; font-size: 0.9rem;
+}
+.spinner {
+  width: 18px; height: 18px; border: 2px solid #e2e8f0;
+  border-top-color: #6366f1; border-radius: 50%;
+  animation: spin 0.8s linear infinite; flex-shrink: 0;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.detect-list { display: flex; flex-direction: column; gap: 8px; max-height: 380px; overflow-y: auto; }
+.detect-item {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 14px; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff;
+}
+.detect-item.unavailable { opacity: 0.5; background: #fafafa; }
+.detect-left { display: flex; align-items: center; gap: 10px; }
+.detect-status {
+  width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center;
+  justify-content: center; font-size: 0.75rem; font-weight: 700; flex-shrink: 0;
+  background: #dcfce7; color: #16a34a;
+}
+.detect-item.unavailable .detect-status { background: #fee2e2; color: #dc2626; }
+.detect-info { display: flex; flex-direction: column; gap: 3px; }
+.detect-name { display: flex; align-items: center; gap: 6px; font-size: 0.9rem; }
+.detect-sub { display: flex; align-items: center; gap: 8px; font-size: 0.8rem; color: #64748b; }
+.detect-version { color: #16a34a; font-size: 0.75rem; }
+.detect-miss { color: #dc2626; font-size: 0.75rem; }
+.tag-daemon { background: #fef3c7; color: #92400e; display: flex; align-items: center; gap: 4px; }
+.dot-green { width: 7px; height: 7px; border-radius: 50%; background: #16a34a; }
+.dot-gray  { width: 7px; height: 7px; border-radius: 50%; background: #94a3b8; }
+.already-added { border-color: #86efac; color: #15803d; background: #f0fdf4; }
 </style>

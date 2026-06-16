@@ -66,6 +66,7 @@ export const api = {
         body: JSON.stringify({ file, content }),
       }),
     promptFiles: () => request<string[]>('/api/config/prompt-files'),
+    detectRuntimes: () => request<DetectedRuntime[]>('/api/config/detect-runtimes'),
   },
 }
 
@@ -191,4 +192,15 @@ export interface AgentRaw {
 export interface AgentsYamlRaw {
   runtimes: RuntimeRaw[]
   agents: AgentRaw[]
+}
+
+export interface DetectedRuntime {
+  id: string
+  type: string
+  command: string
+  version: string | null
+  available: boolean
+  daemonPort?: number
+  daemonRunning?: boolean
+  source: 'cli' | 'daemon'
 }
