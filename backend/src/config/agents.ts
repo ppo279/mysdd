@@ -31,6 +31,10 @@ export interface AgentsYaml {
 
 let _config: AgentsYaml | null = null
 
+export function clearCache() {
+  _config = null
+}
+
 export function loadAgentsConfig(): AgentsYaml {
   if (_config) return _config
 

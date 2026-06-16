@@ -55,7 +55,17 @@ export const api = {
   },
 
   config: {
-    agents: () => request<AgentsConfig>('/api/config/agents'),
+    agents: () => request<AgentsYamlRaw>('/api/config/agents'),
+    saveAgents: (data: AgentsYamlRaw) =>
+      request<{ ok: boolean }>('/api/config/agents', { method: 'PUT', body: JSON.stringify(data) }),
+    getPrompt: (file: string) =>
+      request<{ content: string; path: string }>(`/api/config/prompt?file=${encodeURIComponent(file)}`),
+    savePrompt: (file: string, content: string) =>
+      request<{ ok: boolean }>('/api/config/prompt', {
+        method: 'PUT',
+        body: JSON.stringify({ file, content }),
+      }),
+    promptFiles: () => request<string[]>('/api/config/prompt-files'),
   },
 }
 
@@ -155,7 +165,30 @@ export interface Message {
   createdAt: string
 }
 
+// 旧类型保留兼容
 export interface AgentsConfig {
   runtimes: { id: string; type: string }[]
   agents: { id: string; name: string; runtime: string; outputFile: string; upstream: string[] }[]
+}
+
+// agents.yaml 的原始结构（与文件保持一致）
+export interface RuntimeRaw {
+  id: string
+  type: string
+  command: string
+}
+
+export interface AgentRaw {
+  id: string
+  name: string
+  runtime: string
+  prompt?: string               // 单一提示词文件路径
+  prompts?: Record<string, string>  // tech_stack → 文件路径
+  output_file: string
+  upstream: string[]
+}
+
+export interface AgentsYamlRaw {
+  runtimes: RuntimeRaw[]
+  agents: AgentRaw[]
 }

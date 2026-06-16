@@ -15,6 +15,10 @@ const router = createRouter({
       path: '/workspace/:workspaceId/feature/:featureId',
       component: () => import('@/views/FeatureView.vue'),
     },
+    {
+      path: '/config',
+      component: () => import('@/views/ConfigView.vue'),
+    },
   ],
 })
 

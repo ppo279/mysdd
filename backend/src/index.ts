@@ -7,6 +7,7 @@ import { initDb } from './db/index.js'
 import { workspaceRoutes } from './routes/workspaces.js'
 import { featureRoutes } from './routes/features.js'
 import { stageRoutes } from './routes/stages.js'
+import { configRoutes } from './routes/config.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -34,15 +35,10 @@ app.addContentTypeParser('*', { parseAs: 'string' }, (req, body, done) => {
 await workspaceRoutes(app)
 await featureRoutes(app)
 await stageRoutes(app)
+await configRoutes(app)
 
 // 健康检查
 app.get('/health', async () => ({ ok: true }))
-
-// agents.yaml 配置读取接口
-app.get('/api/config/agents', async () => {
-  const { loadAgentsConfig } = await import('./config/agents.js')
-  return loadAgentsConfig()
-})
 
 const PORT = Number(process.env.PORT ?? 3001)
 await app.listen({ port: PORT, host: '0.0.0.0' })

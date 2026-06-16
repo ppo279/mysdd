@@ -31,7 +31,10 @@ async function handleCreate() {
   <div class="home">
     <header class="header">
       <h1>SDD Multi-Agent</h1>
-      <button class="btn-primary" @click="showCreate = true">+ 新建 Workspace</button>
+      <div class="header-actions">
+        <button class="btn-secondary" @click="router.push('/config')">⚙ Agent 配置</button>
+        <button class="btn-primary" @click="showCreate = true">+ 新建 Workspace</button>
+      </div>
     </header>
 
     <div v-if="store.loading" class="loading">加载中...</div>
@@ -86,6 +89,7 @@ async function handleCreate() {
 <style scoped>
 .home { padding: 24px; max-width: 1100px; margin: 0 auto; }
 .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 32px; }
+.header-actions { display: flex; gap: 8px; }
 h1 { font-size: 1.6rem; font-weight: 700; color: #1a1a2e; }
 .workspace-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
 .workspace-card {
