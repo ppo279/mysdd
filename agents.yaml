@@ -1,0 +1,45 @@
+runtimes:
+  - id: claude
+    type: claude-cli
+    command: claude
+
+agents:
+  - id: spec
+    name: Spec Agent
+    runtime: claude
+    prompt: SDDInAction/2.spec/spec-prompt.md
+    output_file: spec.md
+    upstream: []
+
+  - id: plan
+    name: Plan Agent
+    runtime: claude
+    prompts:
+      java: SDDInAction/3.plan/cli/plan-prompt-cli-java.md
+      python: SDDInAction/3.plan/cli/plan-prompt-cli-python.md
+      ts: SDDInAction/3.plan/web/plan-prompt-web-java.md
+      csharp: SDDInAction/3.plan/web/plan-prompt-web-csharp.md
+    output_file: plan.md
+    upstream:
+      - spec
+
+  - id: tasks
+    name: Task Agent
+    runtime: claude
+    prompts:
+      ts: SDDInAction/4.tasks/tasks-prompt-web.md
+      java: SDDInAction/4.tasks/tasks-prompt-cli.md
+    output_file: tasks.md
+    upstream:
+      - spec
+      - plan
+
+  - id: coding
+    name: Coding Agent
+    runtime: claude
+    prompt: SDDInAction/5.coding/coding-prompt.md
+    output_file: coding.md
+    upstream:
+      - spec
+      - plan
+      - tasks

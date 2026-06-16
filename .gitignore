@@ -1,0 +1,125 @@
+# =========================
+# 1) 已有约定（保留）
+# =========================
+/SDDInAction/
+/.codeboarding
+.claude
+node_modules
+
+# =========================
+# 2) 依赖与锁文件副本（按需）
+# 说明：根目录 package.json 用于编排脚本，无依赖；backend/frontend 的依赖各自管理
+# 如需忽略子项目的 package-lock.json，取消下一行注释
+# **/package-lock.json
+
+# =========================
+# 3) 构建产物
+# =========================
+# Backend（TypeScript -> dist）
+/backend/dist/
+/backend/build/
+*.tsbuildinfo
+
+# Frontend（Vite）
+/frontend/dist/
+/frontend/dist-ssr/
+/frontend/build/
+/frontend/.vite/
+/frontend/coverage/
+
+# 通用
+dist/
+build/
+out/
+
+# =========================
+# 4) 数据库 / 持久化数据
+# =========================
+/data/*.db
+/data/*.db-shm
+/data/*.db-wal
+/data/*.sqlite
+/data/*.sqlite3
+/storage/
+
+# =========================
+# 5) 环境变量与本地配置
+# =========================
+.env
+.env.*
+!.env.example
+*.local
+**/.env
+**/.env.*
+!**/.env.example
+
+# =========================
+# 6) 日志
+# =========================
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+logs/
+*.pid
+*.seed
+*.pid.lock
+
+# =========================
+# 7) 测试与覆盖率
+# =========================
+coverage/
+.nyc_output/
+*.lcov
+.jest-cache/
+
+# =========================
+# 8) IDE / 编辑器
+# =========================
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json.example
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+ehthumbs.db
+$RECYCLE.BIN/
+
+# =========================
+# 9) 临时文件 / 缓存
+# =========================
+.tmp/
+.temp/
+.cache/
+.parcel-cache/
+.eslintcache
+.stylelintcache
+*.tgz
+.npm/
+.yarn/
+.pnp.*
+
+# =========================
+# 10) 操作系统
+# =========================
+.AppleDouble
+.LSOverride
+Icon?
+ehthumbs.db
+[Ss]ystem [Vv]olume [Ii]nformation
+
+# =========================
+# 11) 其它
+# =========================
+.history/
+.svn/
+.hg/
+*.bak
+*.swp
+*.orig
