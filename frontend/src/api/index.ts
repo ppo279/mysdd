@@ -63,6 +63,7 @@ export const api = {
 }
 
 // SSE 流式调用封装（POST + SSE）
+// stageRunId 从第一个 SSE 事件中读取（不再从 HTTP header 读）
 export async function streamPost(
   url: string,
   body: Record<string, unknown>,
@@ -76,10 +77,10 @@ export async function streamPost(
 
   if (!res.ok || !res.body) throw new Error('Stream request failed')
 
-  const stageRunId = res.headers.get('x-stage-run-id') ?? undefined
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
+  let stageRunId: string | undefined
 
   while (true) {
     const { done, value } = await reader.read()
@@ -89,10 +90,11 @@ export async function streamPost(
     buffer = lines.pop() ?? ''
     for (const line of lines) {
       if (!line.startsWith('data: ')) continue
-      try {
-        const data = JSON.parse(line.slice(6))
-        if (data.text) onChunk(data.text)
-      } catch {}
+      let data: any
+      try { data = JSON.parse(line.slice(6)) } catch { continue }
+      if (data.stageRunId) stageRunId = data.stageRunId
+      if (data.text) onChunk(data.text)
+      if (data.error) throw new Error(data.error as string)
     }
   }
 

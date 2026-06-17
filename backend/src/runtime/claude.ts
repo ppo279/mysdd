@@ -1,4 +1,5 @@
 import { spawn } from 'child_process'
+import os from 'os'
 import type { RuntimeAdapter, SendResult } from './adapter.js'
 
 // stream-json 输出的事件结构（claude-code 兼容格式）
@@ -18,9 +19,13 @@ export async function* spawnCliStream(
   args: string[],
   stdinContent?: string,
 ): AsyncIterable<{ sessionId?: string; text?: string }> {
+  // Run from home directory so the CLI doesn't pick up any project CLAUDE.md
+  // (inheriting the backend cwd would activate agent mode with the wrong project context)
+  const cwd = os.homedir()
   const proc = spawn(command, args, {
     stdio: [stdinContent !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
     shell: process.platform === 'win32',
+    cwd,
   })
 
   if (stdinContent !== undefined && proc.stdin) {

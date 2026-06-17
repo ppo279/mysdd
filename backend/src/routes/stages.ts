@@ -20,6 +20,20 @@ const ApproveSchema = z.object({
   artifactContent: z.string(),
 })
 
+function sseHeaders(origin: string | undefined) {
+  return {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': origin ?? '*',
+    'Access-Control-Expose-Headers': 'X-Stage-Run-Id',
+  }
+}
+
+function sseWrite(res: NodeJS.WritableStream, data: Record<string, unknown>) {
+  res.write(`data: ${JSON.stringify(data)}\n\n`)
+}
+
 export async function stageRoutes(app: FastifyInstance) {
   // 启动阶段 —— 返回 SSE 流
   app.post('/api/features/:featureId/stages/start', async (req, reply) => {
@@ -32,29 +46,36 @@ export async function stageRoutes(app: FastifyInstance) {
     const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, feature.workspaceId))
     if (!workspace) return reply.code(404).send({ error: 'Workspace not found' })
 
-    const { stageRunId, stream } = await AgentService.startStage(
-      featureId,
-      body.stage,
-      feature.workspaceId,
-      workspace.techStack,
-      workspace.background,
-      body.firstMessage,
-      body.runtimeId,
-    )
+    // Disable Nagle's algorithm so each write() is flushed to the client immediately
+    reply.raw.socket?.setNoDelay?.(true)
 
-    reply.raw.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'X-Stage-Run-Id': stageRunId,
-      'Access-Control-Allow-Origin': (req.headers.origin as string) ?? '*',
-      'Access-Control-Expose-Headers': 'X-Stage-Run-Id',
-    })
+    // Send SSE headers NOW — before starting the CLI — so the frontend fetch()
+    // resolves immediately and reader.read() is ready to receive tokens in real-time.
+    // stageRunId cannot be in the HTTP header anymore; it arrives as the first SSE event.
+    reply.raw.writeHead(200, sseHeaders(req.headers.origin as string | undefined))
 
-    for await (const chunk of stream) {
-      reply.raw.write(`data: ${JSON.stringify({ text: chunk })}\n\n`)
+    try {
+      const { stageRunId, stream } = await AgentService.startStage(
+        featureId,
+        body.stage,
+        feature.workspaceId,
+        workspace.techStack,
+        workspace.background,
+        body.firstMessage,
+        body.runtimeId,
+      )
+
+      // First event carries the stageRunId so the frontend can track the run
+      sseWrite(reply.raw, { stageRunId })
+
+      for await (const chunk of stream) {
+        sseWrite(reply.raw, { text: chunk })
+      }
+      sseWrite(reply.raw, { done: true, stageRunId })
+    } catch (err: any) {
+      sseWrite(reply.raw, { error: err.message ?? String(err) })
     }
-    reply.raw.write(`data: ${JSON.stringify({ done: true, stageRunId })}\n\n`)
+
     reply.raw.end()
   })
 
@@ -63,19 +84,20 @@ export async function stageRoutes(app: FastifyInstance) {
     const { stageRunId } = req.params as { stageRunId: string }
     const { message } = SendMessageSchema.parse(req.body)
 
-    const stream = await AgentService.sendMessage(stageRunId, message)
+    reply.raw.socket?.setNoDelay?.(true)
+    reply.raw.writeHead(200, sseHeaders(req.headers.origin as string | undefined))
 
-    reply.raw.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'Access-Control-Allow-Origin': (req.headers.origin as string) ?? '*',
-    })
+    try {
+      const stream = await AgentService.sendMessage(stageRunId, message)
 
-    for await (const chunk of stream) {
-      reply.raw.write(`data: ${JSON.stringify({ text: chunk })}\n\n`)
+      for await (const chunk of stream) {
+        sseWrite(reply.raw, { text: chunk })
+      }
+      sseWrite(reply.raw, { done: true })
+    } catch (err: any) {
+      sseWrite(reply.raw, { error: err.message ?? String(err) })
     }
-    reply.raw.write(`data: ${JSON.stringify({ done: true })}\n\n`)
+
     reply.raw.end()
   })
 
