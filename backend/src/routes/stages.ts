@@ -47,6 +47,8 @@ export async function stageRoutes(app: FastifyInstance) {
       'Cache-Control': 'no-cache',
       'Connection': 'keep-alive',
       'X-Stage-Run-Id': stageRunId,
+      'Access-Control-Allow-Origin': (req.headers.origin as string) ?? '*',
+      'Access-Control-Expose-Headers': 'X-Stage-Run-Id',
     })
 
     for await (const chunk of stream) {
@@ -67,6 +69,7 @@ export async function stageRoutes(app: FastifyInstance) {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': (req.headers.origin as string) ?? '*',
     })
 
     for await (const chunk of stream) {
