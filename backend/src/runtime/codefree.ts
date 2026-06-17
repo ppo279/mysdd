@@ -6,18 +6,17 @@ import { spawnCliStream, wrapSessionStream } from './claude.js'
 export class CodefreeAdapter implements RuntimeAdapter {
   constructor(private command: string = 'codefree') {}
 
-  async createSession(systemPrompt: string, firstMessage: string): Promise<SendResult> {
-    // Codefree has no --system-prompt flag; pipe both parts via stdin to trigger print mode
+  async createSession(systemPrompt: string, firstMessage: string, cwd?: string): Promise<SendResult> {
     const args = ['--output-format', 'stream-json']
     const parts = systemPrompt.trim() ? [systemPrompt, firstMessage] : [firstMessage]
-    return wrapSessionStream(spawnCliStream(this.command, args, parts.join('\n\n')), this.command)
+    return wrapSessionStream(spawnCliStream(this.command, args, parts.join('\n\n'), cwd), this.command)
   }
 
-  resumeSession(sessionId: string, message: string): AsyncIterable<string> {
+  resumeSession(sessionId: string, message: string, cwd?: string): AsyncIterable<string> {
     const cmd = this.command
     const args = ['--resume', sessionId, '--output-format', 'stream-json']
     async function* s() {
-      for await (const e of spawnCliStream(cmd, args, message)) if (e.text) yield e.text
+      for await (const e of spawnCliStream(cmd, args, message, cwd)) if (e.text) yield e.text
     }
     return s()
   }

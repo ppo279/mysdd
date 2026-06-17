@@ -1,6 +1,6 @@
 import { eq, asc } from 'drizzle-orm'
 import { db } from '../db/index.js'
-import { stageRuns, messages, features } from '../db/schema.js'
+import { stageRuns, messages, features, workspaces } from '../db/schema.js'
 import { getRuntime } from '../runtime/registry.js'
 import { buildSystemPrompt, buildUpstreamContext, getAgentConfig } from '../config/agents.js'
 import { ArtifactService } from './artifact.js'
@@ -38,13 +38,14 @@ export class AgentService {
     background: string,
     firstMessage: string,
     runtimeId: string = 'claude',
+    localPath?: string,
   ): Promise<{ stageRunId: string; stream: AsyncIterable<string> }> {
     const artifacts = await this.getApprovedArtifacts(featureId)
     const upstreamCtx = buildUpstreamContext(stage, artifacts)
     const systemPrompt = buildSystemPrompt(stage, techStack, background) + upstreamCtx
 
     const runtime = getRuntime(runtimeId)
-    const { sessionId, stream } = await runtime.createSession(systemPrompt, firstMessage)
+    const { sessionId, stream } = await runtime.createSession(systemPrompt, firstMessage, localPath || undefined)
 
     const stageRunId = randomUUID()
     const now = new Date()
@@ -98,8 +99,16 @@ export class AgentService {
     if (!run) throw new Error(`StageRun ${stageRunId} not found`)
     if (!run.cliSessionId) throw new Error(`StageRun ${stageRunId} has no CLI session`)
 
+    // Fetch workspace localPath for the cwd
+    const [feature] = await db.select().from(features).where(eq(features.id, run.featureId))
+    let localPath: string | undefined
+    if (feature) {
+      const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, feature.workspaceId))
+      localPath = ws?.localPath || undefined
+    }
+
     const runtime = getRuntime(run.runtimeId)
-    const stream = runtime.resumeSession(run.cliSessionId, userMessage)
+    const stream = runtime.resumeSession(run.cliSessionId, userMessage, localPath)
 
     const now = new Date()
     await db.insert(messages).values({

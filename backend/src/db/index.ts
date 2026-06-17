@@ -19,6 +19,9 @@ export const db = drizzle(sqlite, { schema })
 
 // 建表（简单 migration）
 export function initDb() {
+  // Add columns that may not exist in older databases
+  try { sqlite.exec(`ALTER TABLE workspaces ADD COLUMN local_path TEXT NOT NULL DEFAULT ''`) } catch { /* already exists */ }
+
   sqlite.exec(`
     CREATE TABLE IF NOT EXISTS workspaces (
       id TEXT PRIMARY KEY,
@@ -27,6 +30,7 @@ export function initDb() {
       repo_url TEXT NOT NULL DEFAULT '',
       tech_stack TEXT NOT NULL DEFAULT 'ts',
       background TEXT NOT NULL DEFAULT '',
+      local_path TEXT NOT NULL DEFAULT '',
       created_at INTEGER NOT NULL
     );
 

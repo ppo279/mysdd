@@ -18,14 +18,15 @@ export async function* spawnCliStream(
   command: string,
   args: string[],
   stdinContent?: string,
+  cwd?: string,
 ): AsyncIterable<{ sessionId?: string; text?: string }> {
-  // Run from home directory so the CLI doesn't pick up any project CLAUDE.md
-  // (inheriting the backend cwd would activate agent mode with the wrong project context)
-  const cwd = os.homedir()
+  // Default to home dir so the CLI doesn't pick up any project CLAUDE.md.
+  // Callers pass the workspace localPath when they want the agent to work inside a project.
+  const resolvedCwd = cwd ?? os.homedir()
   const proc = spawn(command, args, {
     stdio: [stdinContent !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
     shell: process.platform === 'win32',
-    cwd,
+    cwd: resolvedCwd,
   })
 
   if (stdinContent !== undefined && proc.stdin) {
@@ -152,20 +153,17 @@ export async function wrapSessionStream(
 export class ClaudeAdapter implements RuntimeAdapter {
   constructor(private command: string = 'claude') {}
 
-  async createSession(systemPrompt: string, firstMessage: string): Promise<SendResult> {
-    // Pipe firstMessage via stdin instead of deprecated -p flag.
-    // A non-tty stdin pipe signals non-interactive (print) mode to the CLI,
-    // which ensures --output-format stream-json is respected.
+  async createSession(systemPrompt: string, firstMessage: string, cwd?: string): Promise<SendResult> {
     const args: string[] = ['--output-format', 'stream-json', '--verbose']
     if (systemPrompt.trim()) args.push('--system-prompt', systemPrompt)
-    return wrapSessionStream(spawnCliStream(this.command, args, firstMessage), this.command)
+    return wrapSessionStream(spawnCliStream(this.command, args, firstMessage, cwd), this.command)
   }
 
-  resumeSession(sessionId: string, message: string): AsyncIterable<string> {
+  resumeSession(sessionId: string, message: string, cwd?: string): AsyncIterable<string> {
     const cmd = this.command
     const args = ['--resume', sessionId, '--output-format', 'stream-json', '--verbose']
     async function* s() {
-      for await (const e of spawnCliStream(cmd, args, message)) if (e.text) yield e.text
+      for await (const e of spawnCliStream(cmd, args, message, cwd)) if (e.text) yield e.text
     }
     return s()
   }

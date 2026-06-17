@@ -109,6 +109,7 @@ export interface Workspace {
   repoUrl: string
   techStack: string
   background: string
+  localPath: string
   createdAt: string
 }
 

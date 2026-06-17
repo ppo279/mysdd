@@ -7,6 +7,7 @@ export const workspaces = sqliteTable('workspaces', {
   repoUrl: text('repo_url').notNull().default(''),
   techStack: text('tech_stack').notNull().default('ts'),
   background: text('background').notNull().default(''),
+  localPath: text('local_path').notNull().default(''),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
 })
 

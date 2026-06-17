@@ -4,6 +4,12 @@ import { workspaces, features } from '../db/schema.js'
 import { eq, asc } from 'drizzle-orm'
 import { randomUUID } from 'crypto'
 import { z } from 'zod'
+import path from 'path'
+import fs from 'fs'
+import { fileURLToPath } from 'url'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const STORAGE_ROOT = path.resolve(__dirname, '../../../storage')
 
 const CreateWorkspaceSchema = z.object({
   name: z.string().min(1),
@@ -15,18 +21,27 @@ const CreateWorkspaceSchema = z.object({
 
 const UpdateWorkspaceSchema = CreateWorkspaceSchema.partial()
 
+function workspaceDir(id: string) {
+  return path.join(STORAGE_ROOT, 'workspaces', id)
+}
+
 export async function workspaceRoutes(app: FastifyInstance) {
   // 列出所有 workspace
   app.get('/api/workspaces', async () => {
     return db.select().from(workspaces).orderBy(asc(workspaces.createdAt))
   })
 
-  // 创建 workspace
+  // 创建 workspace（自动建本地目录）
   app.post('/api/workspaces', async (req, reply) => {
     const body = CreateWorkspaceSchema.parse(req.body)
+    const id = randomUUID()
+    const localPath = workspaceDir(id)
+    fs.mkdirSync(localPath, { recursive: true })
+
     const workspace = {
-      id: randomUUID(),
+      id,
       ...body,
+      localPath,
       createdAt: new Date(),
     }
     await db.insert(workspaces).values(workspace)
@@ -57,9 +72,13 @@ export async function workspaceRoutes(app: FastifyInstance) {
     return updated
   })
 
-  // 删除 workspace
+  // 删除 workspace（同时删除本地目录）
   app.delete('/api/workspaces/:id', async (req, reply) => {
     const { id } = req.params as { id: string }
+    const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, id))
+    if (ws?.localPath) {
+      try { fs.rmSync(ws.localPath, { recursive: true, force: true }) } catch { /* ignore */ }
+    }
     await db.delete(workspaces).where(eq(workspaces.id, id))
     return reply.code(204).send()
   })

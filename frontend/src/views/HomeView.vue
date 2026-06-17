@@ -2,20 +2,31 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useWorkspaceStore } from '@/stores/workspace'
-import type { WorkspaceInput } from '@/api'
+import type { Workspace, WorkspaceInput } from '@/api'
 import {
   NLayout, NLayoutHeader, NLayoutContent, NSpace, NButton, NGrid, NGridItem,
   NCard, NTag, NText, NEmpty, NSpin, NModal, NForm, NFormItem, NInput,
-  NSelect, NScrollbar, useMessage,
+  NSelect, NPopconfirm, useMessage,
 } from 'naive-ui'
 
 const router = useRouter()
 const store = useWorkspaceStore()
 const message = useMessage()
 
+// ── Create ────────────────────────────────────────────
 const showCreate = ref(false)
 const creating = ref(false)
-const form = ref<WorkspaceInput>({ name: '', description: '', repoUrl: '', techStack: 'ts', background: '' })
+const createForm = ref<WorkspaceInput>({
+  name: '', description: '', repoUrl: '', techStack: 'ts', background: '',
+})
+
+// ── Edit ──────────────────────────────────────────────
+const showEdit = ref(false)
+const editing = ref(false)
+const editTarget = ref<Workspace | null>(null)
+const editForm = ref<WorkspaceInput>({
+  name: '', description: '', repoUrl: '', techStack: 'ts', background: '',
+})
 
 const techOptions = [
   { label: 'TypeScript / Web', value: 'ts' },
@@ -31,18 +42,51 @@ const STACK_COLORS: Record<string, 'info' | 'success' | 'warning' | 'error' | 'd
 onMounted(() => store.fetchAll())
 
 async function handleCreate() {
-  if (!form.value.name.trim()) return
+  if (!createForm.value.name.trim()) return
   creating.value = true
   try {
-    const ws = await store.create(form.value)
+    const ws = await store.create(createForm.value)
     showCreate.value = false
-    form.value = { name: '', description: '', repoUrl: '', techStack: 'ts', background: '' }
+    createForm.value = { name: '', description: '', repoUrl: '', techStack: 'ts', background: '' }
     router.push(`/workspace/${ws.id}`)
     message.success('Workspace 创建成功')
   } catch (e: any) {
     message.error(e.message)
   } finally {
     creating.value = false
+  }
+}
+
+function openEdit(ws: Workspace, e: Event) {
+  e.stopPropagation()
+  editTarget.value = ws
+  editForm.value = {
+    name: ws.name, description: ws.description, repoUrl: ws.repoUrl,
+    techStack: ws.techStack, background: ws.background,
+  }
+  showEdit.value = true
+}
+
+async function handleEdit() {
+  if (!editTarget.value || !editForm.value.name.trim()) return
+  editing.value = true
+  try {
+    await store.update(editTarget.value.id, editForm.value)
+    showEdit.value = false
+    message.success('已更新')
+  } catch (e: any) {
+    message.error(e.message)
+  } finally {
+    editing.value = false
+  }
+}
+
+async function handleDelete(id: string) {
+  try {
+    await store.remove(id)
+    message.success('已删除')
+  } catch (e: any) {
+    message.error(e.message)
   }
 }
 </script>
@@ -80,9 +124,19 @@ async function handleCreate() {
                 <NTag :type="STACK_COLORS[ws.techStack] ?? 'default'" size="small" round>
                   {{ ws.techStack }}
                 </NTag>
-                <NText v-if="ws.repoUrl" depth="3" style="font-size: 12px;">
-                  {{ ws.repoUrl }}
+                <NText v-if="ws.localPath" depth="3" style="font-size: 11px; word-break: break-all;">
+                  {{ ws.localPath }}
                 </NText>
+              </NSpace>
+              <!-- 操作按钮 -->
+              <NSpace style="margin-top: 4px;">
+                <NButton size="small" @click="openEdit(ws, $event)">编辑</NButton>
+                <NPopconfirm @positive-click="handleDelete(ws.id)" @click.stop>
+                  <template #trigger>
+                    <NButton size="small" type="error" @click.stop>删除</NButton>
+                  </template>
+                  确定删除「{{ ws.name }}」及其本地目录吗？
+                </NPopconfirm>
               </NSpace>
             </NSpace>
           </NCard>
@@ -91,32 +145,66 @@ async function handleCreate() {
     </NLayoutContent>
   </NLayout>
 
+  <!-- 创建 Modal -->
   <NModal v-model:show="showCreate">
-    <NCard title="新建 Workspace" closable style="width:500px;background:#fff;"
-      @close="showCreate = false">
+    <NCard title="新建 Workspace" closable style="width:500px;background:#fff;" @close="showCreate = false">
       <NForm label-placement="top" :show-feedback="false">
         <NFormItem label="名称 *">
-          <NInput v-model:value="form.name" placeholder="如：电商平台" />
+          <NInput v-model:value="createForm.name" placeholder="如：电商平台" />
         </NFormItem>
         <NFormItem label="描述">
-          <NInput v-model:value="form.description" placeholder="简要说明项目用途" />
+          <NInput v-model:value="createForm.description" placeholder="简要说明项目用途" />
         </NFormItem>
         <NFormItem label="仓库地址">
-          <NInput v-model:value="form.repoUrl" placeholder="https://github.com/..." />
+          <NInput v-model:value="createForm.repoUrl" placeholder="https://github.com/..." />
         </NFormItem>
         <NFormItem label="技术选型">
-          <NSelect v-model:value="form.techStack" :options="techOptions" />
+          <NSelect v-model:value="createForm.techStack" :options="techOptions" />
         </NFormItem>
         <NFormItem label="背景上下文">
-          <NInput v-model:value="form.background" type="textarea" :rows="4"
+          <NInput v-model:value="createForm.background" type="textarea" :rows="4"
             placeholder="项目背景、约束、注意事项..." />
         </NFormItem>
       </NForm>
       <template #footer>
         <NSpace justify="end">
           <NButton @click="showCreate = false">取消</NButton>
-          <NButton type="primary" :loading="creating" :disabled="!form.name.trim()" @click="handleCreate">
+          <NButton type="primary" :loading="creating" :disabled="!createForm.name.trim()" @click="handleCreate">
             创建
+          </NButton>
+        </NSpace>
+      </template>
+    </NCard>
+  </NModal>
+
+  <!-- 编辑 Modal -->
+  <NModal v-model:show="showEdit">
+    <NCard title="编辑 Workspace" closable style="width:500px;background:#fff;" @close="showEdit = false">
+      <NForm label-placement="top" :show-feedback="false">
+        <NFormItem label="名称 *">
+          <NInput v-model:value="editForm.name" />
+        </NFormItem>
+        <NFormItem label="描述">
+          <NInput v-model:value="editForm.description" />
+        </NFormItem>
+        <NFormItem label="仓库地址">
+          <NInput v-model:value="editForm.repoUrl" />
+        </NFormItem>
+        <NFormItem label="技术选型">
+          <NSelect v-model:value="editForm.techStack" :options="techOptions" />
+        </NFormItem>
+        <NFormItem label="背景上下文">
+          <NInput v-model:value="editForm.background" type="textarea" :rows="4" />
+        </NFormItem>
+        <NFormItem label="本地执行目录（只读）">
+          <NInput :value="editTarget?.localPath ?? ''" disabled />
+        </NFormItem>
+      </NForm>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="showEdit = false">取消</NButton>
+          <NButton type="primary" :loading="editing" :disabled="!editForm.name.trim()" @click="handleEdit">
+            保存
           </NButton>
         </NSpace>
       </template>

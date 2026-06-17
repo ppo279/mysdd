@@ -83,6 +83,9 @@ async function handleCreateFeature() {
               {{ detail.repoUrl }}
             </NText>
           </NSpace>
+          <NText v-if="detail.localPath" depth="3" style="font-size: 12px; margin-top: 2px;">
+            📁 {{ detail.localPath }}
+          </NText>
         </NSpace>
 
         <NEmpty v-if="detail.features.length === 0" description="还没有 Feature，点击右上角新建" />
