@@ -10,8 +10,7 @@ export interface AgentConfig {
   id: string
   name: string
   runtime: string
-  prompt?: string
-  prompts?: Record<string, string>
+  instruction: string
   outputFile: string
   upstream: string[]
 }
@@ -22,9 +21,13 @@ export interface RuntimeConfig {
   command?: string
 }
 
+export interface BaseLayer {
+  name: string
+  content: string
+}
+
 export interface GlobalConfig {
-  // 所有 Agent 共享的基础提示词文件列表（按顺序注入）
-  base_prompts: string[]
+  base_layers: BaseLayer[]
 }
 
 export interface AgentsYaml {
@@ -51,14 +54,13 @@ export function loadAgentsConfig(): AgentsYaml {
   _config = {
     runtimes: (parsed.runtimes as RuntimeConfig[]) ?? [],
     global: {
-      base_prompts: (globalRaw.base_prompts as string[]) ?? [],
+      base_layers: (globalRaw.base_layers as BaseLayer[]) ?? [],
     },
     agents: (parsed.agents as Array<Record<string, unknown>>).map((a) => ({
       id: a.id as string,
       name: a.name as string,
       runtime: a.runtime as string,
-      prompt: a.prompt as string | undefined,
-      prompts: a.prompts as Record<string, string> | undefined,
+      instruction: (a.instruction as string) ?? '',
       outputFile: a.output_file as string,
       upstream: (a.upstream as string[]) ?? [],
     })),
@@ -74,39 +76,23 @@ export function getAgentConfig(agentId: string): AgentConfig {
   return agent
 }
 
-export function loadPromptFile(relativePath: string): string {
-  const fullPath = path.resolve(ROOT, relativePath)
-  return fs.readFileSync(fullPath, 'utf-8')
-}
-
 // ── 系统提示拼装（三层）────────────────────────────────────────
-// Layer 1: global.base_prompts（所有 Agent 共享）
-// Layer 2: agent 角色提示词（按 techStack 选择）
+// Layer 1: global.base_layers（所有 Agent 共享，inline 内容）
+// Layer 2: agent instruction（inline 内容）
 // Layer 3: workspace 背景（运行时注入）
-export function buildSystemPrompt(agentId: string, techStack: string, workspaceBackground: string): string {
+export function buildSystemPrompt(agentId: string, _techStack: string, workspaceBackground: string): string {
   const { global: globalCfg } = loadAgentsConfig()
   const agent = getAgentConfig(agentId)
 
   const parts: string[] = []
 
   // Layer 1: 基础层
-  for (const filePath of globalCfg.base_prompts) {
-    try {
-      parts.push(loadPromptFile(filePath))
-    } catch {
-      console.warn(`[buildSystemPrompt] base_prompt file not found: ${filePath}`)
-    }
+  for (const layer of globalCfg.base_layers) {
+    if (layer.content?.trim()) parts.push(layer.content)
   }
 
   // Layer 2: 角色层
-  let rolePrompt = ''
-  if (agent.prompt) {
-    rolePrompt = loadPromptFile(agent.prompt)
-  } else if (agent.prompts) {
-    const file = agent.prompts[techStack] ?? Object.values(agent.prompts)[0]
-    if (file) rolePrompt = loadPromptFile(file)
-  }
-  if (rolePrompt) parts.push(rolePrompt)
+  if (agent.instruction.trim()) parts.push(agent.instruction)
 
   // Layer 3: 运行时背景
   if (workspaceBackground.trim()) {

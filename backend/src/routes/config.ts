@@ -21,21 +21,23 @@ const AgentSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
   runtime: z.string().min(1),
-  // single prompt file
-  prompt: z.string().optional(),
-  // per-tech-stack prompts
-  prompts: z.record(z.string()).optional(),
+  instruction: z.string().default(''),
   output_file: z.string().min(1),
   upstream: z.array(z.string()).default([]),
 })
 
+const BaseLayerSchema = z.object({
+  name: z.string().default(''),
+  content: z.string().default(''),
+})
+
 const GlobalSchema = z.object({
-  base_prompts: z.array(z.string()).default([]),
+  base_layers: z.array(BaseLayerSchema).default([]),
 })
 
 const AgentsYamlSchema = z.object({
   runtimes: z.array(RuntimeSchema),
-  global: GlobalSchema.default({ base_prompts: [] }),
+  global: GlobalSchema.default({ base_layers: [] }),
   agents: z.array(AgentSchema),
 })
 
@@ -63,53 +65,6 @@ export async function configRoutes(app: FastifyInstance) {
     const { clearCache } = await import('../config/agents.js')
     clearCache()
     return { ok: true }
-  })
-
-  // 读取提示词文件内容（相对于项目根）
-  app.get('/api/config/prompt', async (req, reply) => {
-    const { file } = req.query as { file?: string }
-    if (!file) return reply.code(400).send({ error: 'file query required' })
-
-    const fullPath = path.resolve(ROOT, file)
-    // 安全检查：只允许读 ROOT 内的文件
-    if (!fullPath.startsWith(ROOT)) return reply.code(403).send({ error: 'Forbidden' })
-
-    if (!fs.existsSync(fullPath)) return reply.code(404).send({ error: 'File not found' })
-    return { content: fs.readFileSync(fullPath, 'utf-8'), path: file }
-  })
-
-  // 写入提示词文件内容
-  app.put('/api/config/prompt', async (req, reply) => {
-    const { file, content } = req.body as { file: string; content: string }
-    if (!file) return reply.code(400).send({ error: 'file required' })
-
-    const fullPath = path.resolve(ROOT, file)
-    if (!fullPath.startsWith(ROOT)) return reply.code(403).send({ error: 'Forbidden' })
-
-    fs.mkdirSync(path.dirname(fullPath), { recursive: true })
-    fs.writeFileSync(fullPath, content, 'utf-8')
-    return { ok: true }
-  })
-
-  // 列出 SDDInAction 下的 md 文件（给文件选择器用）
-  app.get('/api/config/prompt-files', async () => {
-    const sddDir = path.join(ROOT, 'SDDInAction')
-    const files: string[] = []
-
-    function walk(dir: string) {
-      if (!fs.existsSync(dir)) return
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        const fullPath = path.join(dir, entry.name)
-        if (entry.isDirectory()) {
-          walk(fullPath)
-        } else if (entry.name.endsWith('.md')) {
-          files.push(path.relative(ROOT, fullPath))
-        }
-      }
-    }
-
-    walk(sddDir)
-    return files
   })
 
   // 检测本机可用的 AI CLI 运行时

@@ -58,14 +58,6 @@ export const api = {
     agents: () => request<AgentsYamlRaw>('/api/config/agents'),
     saveAgents: (data: AgentsYamlRaw) =>
       request<{ ok: boolean }>('/api/config/agents', { method: 'PUT', body: JSON.stringify(data) }),
-    getPrompt: (file: string) =>
-      request<{ content: string; path: string }>(`/api/config/prompt?file=${encodeURIComponent(file)}`),
-    savePrompt: (file: string, content: string) =>
-      request<{ ok: boolean }>('/api/config/prompt', {
-        method: 'PUT',
-        body: JSON.stringify({ file, content }),
-      }),
-    promptFiles: () => request<string[]>('/api/config/prompt-files'),
     detectRuntimes: () => request<DetectedRuntime[]>('/api/config/detect-runtimes'),
   },
 }
@@ -183,14 +175,18 @@ export interface AgentRaw {
   id: string
   name: string
   runtime: string
-  prompt?: string               // 单一提示词文件路径
-  prompts?: Record<string, string>  // tech_stack → 文件路径
+  instruction: string
   output_file: string
   upstream: string[]
 }
 
+export interface BaseLayer {
+  name: string
+  content: string
+}
+
 export interface GlobalConfig {
-  base_prompts: string[]
+  base_layers: BaseLayer[]
 }
 
 export interface AgentsYamlRaw {

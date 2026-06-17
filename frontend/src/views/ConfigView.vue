@@ -1,14 +1,13 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed, watch } from 'vue'
+import { ref, reactive, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { api, type AgentsYamlRaw, type RuntimeRaw, type AgentRaw, type DetectedRuntime } from '@/api'
 import { defineAsyncComponent } from 'vue'
 import {
   NLayout, NLayoutHeader, NLayoutContent, NSpace, NButton, NText, NEmpty,
   NTabs, NTabPane, NTag, NSpin,
-  NModal, NCard, NForm, NFormItem, NInput, NSelect, NCheckbox, NRadioGroup, NRadio,
+  NModal, NCard, NForm, NFormItem, NInput, NSelect, NCheckbox,
   NList, NListItem, NThing, useMessage,
-  NScrollbar,
 } from 'naive-ui'
 const MarkdownEditor = defineAsyncComponent(() => import('@/components/MarkdownEditor.vue'))
 
@@ -16,8 +15,7 @@ const router = useRouter()
 const message = useMessage()
 
 // ─── 数据 ──────────────────────────────────────────────
-const config = ref<AgentsYamlRaw>({ runtimes: [], global: { base_prompts: [] }, agents: [] })
-const promptFiles = ref<string[]>([])
+const config = ref<AgentsYamlRaw>({ runtimes: [], global: { base_layers: [] }, agents: [] })
 const saving = ref(false)
 const activeTab = ref<'agents' | 'global' | 'runtimes'>('agents')
 
@@ -61,95 +59,35 @@ function addAllDetected() {
 // ─── Agent 编辑 ────────────────────────────────────────
 const agentModal = ref(false)
 const editingAgent = ref<AgentRaw | null>(null)
-const agentForm = reactive<AgentRaw & { promptMode: 'single' | 'multi' }>({
+const agentForm = reactive<AgentRaw>({
   id: '', name: '', runtime: 'claude',
-  prompt: '', prompts: {}, output_file: '', upstream: [],
-  promptMode: 'single',
+  instruction: '', output_file: '', upstream: [],
 })
-const multiPromptEntries = ref<{ key: string; value: string }[]>([])
-
-const inlinePromptContent = ref('')
-const inlinePromptSaving = ref(false)
-const activeMultiIdx = ref<number | null>(null)
-
-async function loadInlinePrompt(filePath: string) {
-  if (!filePath.trim()) { inlinePromptContent.value = ''; return }
-  try {
-    const result = await api.config.getPrompt(filePath)
-    inlinePromptContent.value = result.content
-  } catch {
-    inlinePromptContent.value = ''
-  }
-}
-
-watch(() => agentForm.prompt, (val) => {
-  if (agentForm.promptMode === 'single') loadInlinePrompt(val ?? '')
-})
-
-async function selectMultiEntry(idx: number) {
-  activeMultiIdx.value = idx
-  await loadInlinePrompt(multiPromptEntries.value[idx]?.value ?? '')
-}
-
-async function saveInlinePrompt() {
-  let filePath = ''
-  if (agentForm.promptMode === 'single') {
-    filePath = agentForm.prompt ?? ''
-  } else if (activeMultiIdx.value !== null) {
-    filePath = multiPromptEntries.value[activeMultiIdx.value]?.value ?? ''
-  }
-  if (!filePath.trim()) return
-  inlinePromptSaving.value = true
-  try {
-    await api.config.savePrompt(filePath, inlinePromptContent.value)
-    message.success('文件已保存')
-  } catch (e: any) {
-    message.error(e.message)
-  } finally {
-    inlinePromptSaving.value = false
-  }
-}
 
 // ─── 全局基础层 ────────────────────────────────────────
-const globalPreviewIdx = ref<number | null>(null)
-const globalPreviewContent = ref('')
-const globalPreviewSaving = ref(false)
+const globalSelectedIdx = ref<number | null>(null)
 
-async function loadGlobalPreview(idx: number) {
-  globalPreviewIdx.value = idx
-  const filePath = config.value.global?.base_prompts?.[idx] ?? ''
-  if (!filePath) { globalPreviewContent.value = ''; return }
-  try {
-    const result = await api.config.getPrompt(filePath)
-    globalPreviewContent.value = result.content
-  } catch {
-    globalPreviewContent.value = ''
-  }
+const globalSelectedContent = computed({
+  get: () =>
+    globalSelectedIdx.value !== null
+      ? (config.value.global.base_layers[globalSelectedIdx.value]?.content ?? '')
+      : '',
+  set: (val: string) => {
+    if (globalSelectedIdx.value !== null) {
+      config.value.global.base_layers[globalSelectedIdx.value].content = val
+    }
+  },
+})
+
+function addBaseLayer() {
+  config.value.global.base_layers.push({ name: '新基础层', content: '' })
+  globalSelectedIdx.value = config.value.global.base_layers.length - 1
 }
 
-async function saveGlobalPreview() {
-  const idx = globalPreviewIdx.value
-  if (idx === null) return
-  const filePath = config.value.global?.base_prompts?.[idx] ?? ''
-  if (!filePath) return
-  globalPreviewSaving.value = true
-  try {
-    await api.config.savePrompt(filePath, globalPreviewContent.value)
-    message.success('文件已保存')
-  } catch (e: any) {
-    message.error(e.message)
-  } finally {
-    globalPreviewSaving.value = false
-  }
-}
-
-function addBasePrompt() {
-  config.value.global.base_prompts.push('')
-}
-
-function removeBasePrompt(idx: number) {
-  config.value.global.base_prompts.splice(idx, 1)
-  if (globalPreviewIdx.value === idx) { globalPreviewIdx.value = null; globalPreviewContent.value = '' }
+function removeBaseLayer(idx: number) {
+  config.value.global.base_layers.splice(idx, 1)
+  if (globalSelectedIdx.value === idx) globalSelectedIdx.value = null
+  else if (globalSelectedIdx.value !== null && globalSelectedIdx.value > idx) globalSelectedIdx.value--
 }
 
 // ─── 计算属性 ──────────────────────────────────────────
@@ -158,13 +96,12 @@ const agentIds = computed(() => config.value.agents.map((a) => a.id))
 const runtimeOptions = computed(() => runtimeIds.value.map((id) => ({ label: id, value: id })))
 
 onMounted(async () => {
-  const [cfg, files] = await Promise.all([api.config.agents(), api.config.promptFiles()])
+  const cfg = await api.config.agents()
   config.value = {
     runtimes: (cfg.runtimes ?? []).map((r) => ({ id: r.id, type: r.type, command: (r as any).command ?? '' })),
-    global: { base_prompts: cfg.global?.base_prompts ?? [] },
+    global: { base_layers: cfg.global?.base_layers ?? [] },
     agents: cfg.agents ?? [],
   }
-  promptFiles.value = files
 })
 
 // ─── 保存整体配置 ──────────────────────────────────────
@@ -212,33 +149,22 @@ function openAddAgent() {
   editingAgent.value = null
   Object.assign(agentForm, {
     id: '', name: '', runtime: runtimeIds.value[0] ?? 'claude',
-    prompt: '', prompts: {}, output_file: '', upstream: [], promptMode: 'single',
+    instruction: '', output_file: '', upstream: [],
   })
-  multiPromptEntries.value = []
-  inlinePromptContent.value = ''
-  activeMultiIdx.value = null
   agentModal.value = true
 }
 
-async function openEditAgent(agent: AgentRaw) {
+function openEditAgent(agent: AgentRaw) {
   editingAgent.value = agent
-  const hasMulti = !!agent.prompts && Object.keys(agent.prompts).length > 0
   Object.assign(agentForm, {
-    ...agent,
-    promptMode: hasMulti ? 'multi' : 'single',
-    prompt: agent.prompt ?? '',
-    prompts: agent.prompts ?? {},
+    id: agent.id,
+    name: agent.name,
+    runtime: agent.runtime,
+    instruction: agent.instruction ?? '',
+    output_file: agent.output_file,
+    upstream: [...agent.upstream],
   })
-  multiPromptEntries.value = hasMulti
-    ? Object.entries(agent.prompts!).map(([key, value]) => ({ key, value }))
-    : [{ key: '', value: '' }]
-  activeMultiIdx.value = null
-  inlinePromptContent.value = ''
   agentModal.value = true
-
-  if (!hasMulti && agent.prompt) {
-    await loadInlinePrompt(agent.prompt)
-  }
 }
 
 function saveAgent() {
@@ -248,18 +174,9 @@ function saveAgent() {
     id: agentForm.id,
     name: agentForm.name,
     runtime: agentForm.runtime,
+    instruction: agentForm.instruction,
     output_file: agentForm.output_file,
     upstream: agentForm.upstream,
-  }
-
-  if (agentForm.promptMode === 'single') {
-    data.prompt = agentForm.prompt
-  } else {
-    const prompts: Record<string, string> = {}
-    for (const entry of multiPromptEntries.value) {
-      if (entry.key.trim()) prompts[entry.key.trim()] = entry.value
-    }
-    data.prompts = prompts
   }
 
   if (editingAgent.value) {
@@ -278,41 +195,6 @@ function toggleUpstream(agentId: string) {
   const idx = agentForm.upstream.indexOf(agentId)
   if (idx === -1) agentForm.upstream.push(agentId)
   else agentForm.upstream.splice(idx, 1)
-}
-
-function addMultiEntry() {
-  multiPromptEntries.value.push({ key: '', value: '' })
-}
-
-function removeMultiEntry(idx: number) {
-  multiPromptEntries.value.splice(idx, 1)
-}
-
-// ─── 文件浏览器 ─────────────────────────────────────────
-const filePickerOpen = ref(false)
-const filePickerFilter = ref('')
-const selectingFor = ref<'single' | number | null>(null)
-const filteredFiles = computed(() =>
-  promptFiles.value.filter((f) => f.toLowerCase().includes(filePickerFilter.value.toLowerCase()))
-)
-
-function openFilePicker(target: 'single' | number) {
-  selectingFor.value = target
-  filePickerFilter.value = ''
-  filePickerOpen.value = true
-}
-
-function selectFile(file: string) {
-  if (selectingFor.value === 'single') {
-    agentForm.prompt = file
-  } else if (selectingFor.value !== null) {
-    const idx = selectingFor.value as number
-    if (multiPromptEntries.value[idx]) {
-      multiPromptEntries.value[idx].value = file
-    }
-  }
-  selectingFor.value = null
-  filePickerOpen.value = false
 }
 </script>
 
@@ -335,7 +217,7 @@ function selectFile(file: string) {
         <NTabPane name="agents" tab="Agent 列表">
           <div style="padding: 16px 0;">
             <NSpace justify="space-between" align="center" style="margin-bottom: 14px;">
-              <NText depth="3" style="font-size:13px;">配置 Agent 的名称、运行时与指令文件。流转顺序即为列表顺序。</NText>
+              <NText depth="3" style="font-size:13px;">配置 Agent 的名称、运行时与指令。流转顺序即为列表顺序。</NText>
               <NButton @click="openAddAgent">+ 新增 Agent</NButton>
             </NSpace>
 
@@ -362,13 +244,10 @@ function selectFile(file: string) {
                     </NSpace>
                   </template>
                   <template #description>
-                    <div style="font-size:12px;color:#888;font-family:monospace;margin-top:4px;">
-                      <template v-if="agent.prompt">{{ agent.prompt }}</template>
-                      <template v-else-if="agent.prompts">
-                        <span v-for="(path, key) in agent.prompts" :key="key" style="margin-right:12px;">
-                          <NText type="info" style="font-size:11px;">{{ key }}:</NText> {{ path }}
-                        </span>
-                      </template>
+                    <div style="font-size:12px;color:#888;margin-top:4px;">
+                      <span v-if="agent.instruction?.trim()">
+                        {{ agent.instruction.slice(0, 80) }}{{ agent.instruction.length > 80 ? '…' : '' }}
+                      </span>
                       <span v-else style="color:#ccc;">未配置指令</span>
                     </div>
                   </template>
@@ -389,55 +268,56 @@ function selectFile(file: string) {
           <div style="padding: 16px 0;">
             <NSpace justify="space-between" align="center" style="margin-bottom: 14px;">
               <NText depth="3" style="font-size:13px;">
-                每次对话都会将以下文件<strong>按顺序</strong>注入到系统提示最前面（如 constitution.md、AGENTS.md）
+                每次新对话都会将以下内容<strong>按顺序</strong>注入到所有 Agent 系统提示最前面
               </NText>
-              <NButton @click="addBasePrompt">+ 添加文件</NButton>
+              <NButton @click="addBaseLayer">+ 添加基础层</NButton>
             </NSpace>
 
             <div style="display:flex;gap:0;border:1px solid #efeff5;border-radius:8px;overflow:hidden;height:calc(100vh - 200px);">
-              <!-- 左：文件列表 -->
-              <div style="width:300px;flex-shrink:0;border-right:1px solid #efeff5;overflow-y:auto;">
-                <NEmpty v-if="config.global.base_prompts.length === 0" description="未配置" style="padding:32px 0;" />
-                <div v-for="(filePath, idx) in config.global.base_prompts" :key="idx"
+              <!-- 左：基础层列表 -->
+              <div style="width:240px;flex-shrink:0;border-right:1px solid #efeff5;overflow-y:auto;">
+                <NEmpty v-if="config.global.base_layers.length === 0" description="未配置" style="padding:32px 0;" />
+                <div
+                  v-for="(layer, idx) in config.global.base_layers"
+                  :key="idx"
                   :style="{
                     display:'flex',alignItems:'center',gap:'8px',padding:'10px 12px',
                     cursor:'pointer',borderBottom:'1px solid #f5f5f5',
-                    background: globalPreviewIdx === idx ? '#f0f0ff' : 'transparent',
+                    background: globalSelectedIdx === idx ? '#f0f0ff' : 'transparent',
                   }"
-                  @click="loadGlobalPreview(idx)"
+                  @click="globalSelectedIdx = idx"
                 >
                   <div :style="{
                     width:'20px',height:'20px',borderRadius:'50%',flexShrink:0,
                     display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',fontWeight:'700',
-                    background: globalPreviewIdx === idx ? '#6366f1' : '#e5e5e5',
-                    color: globalPreviewIdx === idx ? '#fff' : '#666',
+                    background: globalSelectedIdx === idx ? '#6366f1' : '#e5e5e5',
+                    color: globalSelectedIdx === idx ? '#fff' : '#666',
                   }">{{ idx + 1 }}</div>
                   <input
-                    v-model="config.global.base_prompts[idx]"
-                    style="flex:1;border:none;background:transparent;font-size:12px;font-family:monospace;color:#374151;outline:none;padding:0;"
-                    placeholder="文件路径（相对项目根）"
+                    v-model="layer.name"
+                    style="flex:1;border:none;background:transparent;font-size:13px;color:#374151;outline:none;padding:0;"
+                    placeholder="层名称"
                     @click.stop
-                    @change="globalPreviewIdx === idx && loadGlobalPreview(idx)"
                   />
-                  <NButton size="tiny" type="error" ghost @click.stop="removeBasePrompt(idx)">✕</NButton>
+                  <NButton size="tiny" type="error" ghost @click.stop="removeBaseLayer(idx)">✕</NButton>
                 </div>
               </div>
 
               <!-- 右：编辑器 -->
               <div style="flex:1;display:flex;flex-direction:column;background:#1e1e2e;">
-                <div v-if="globalPreviewIdx === null"
+                <div v-if="globalSelectedIdx === null"
                   style="flex:1;display:flex;align-items:center;justify-content:center;color:#555;font-size:14px;">
-                  ← 点击左侧文件查看/编辑内容
+                  ← 点击左侧基础层查看/编辑内容
                 </div>
                 <template v-else>
-                  <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 16px;border-bottom:1px solid #2d2d3f;background:#1a1a2e;">
-                    <code style="font-size:11px;color:#94a3b8;">{{ config.global.base_prompts[globalPreviewIdx] }}</code>
-                    <NButton size="small" type="primary" :loading="globalPreviewSaving" @click="saveGlobalPreview">
-                      保存文件
-                    </NButton>
+                  <div style="display:flex;align-items:center;padding:8px 16px;border-bottom:1px solid #2d2d3f;background:#1a1a2e;">
+                    <NText style="color:#94a3b8;font-size:13px;">
+                      {{ config.global.base_layers[globalSelectedIdx]?.name || '未命名' }}
+                      <span style="color:#555;font-size:11px;margin-left:8px;">（修改后点击「保存配置」生效）</span>
+                    </NText>
                   </div>
                   <div style="flex:1;overflow:hidden;">
-                    <MarkdownEditor v-model="globalPreviewContent" style="height:100%;border-radius:0;border:none;" />
+                    <MarkdownEditor v-model="globalSelectedContent" style="height:100%;border-radius:0;border:none;" />
                   </div>
                 </template>
               </div>
@@ -571,7 +451,7 @@ function selectFile(file: string) {
   <NModal v-model:show="agentModal">
     <div style="display:flex;width:90vw;max-width:1100px;height:82vh;overflow:hidden;border-radius:8px;background:#fff;">
       <!-- 左：配置区 -->
-      <div style="width:340px;flex-shrink:0;display:flex;flex-direction:column;border-right:1px solid #efeff5;overflow-y:auto;padding:20px;gap:12px;">
+      <div style="width:320px;flex-shrink:0;display:flex;flex-direction:column;border-right:1px solid #efeff5;overflow-y:auto;padding:20px;gap:12px;">
         <NText strong style="font-size:15px;">{{ editingAgent ? '编辑 Agent' : '新增 Agent' }}</NText>
 
         <NForm label-placement="top" :show-feedback="false" style="gap:10px;display:flex;flex-direction:column;">
@@ -604,44 +484,6 @@ function selectFile(file: string) {
               <NText v-if="!agentIds.filter(id => id !== agentForm.id).length" depth="3" style="font-size:12px;">无其他 Agent</NText>
             </NSpace>
           </NFormItem>
-
-          <NFormItem label="指令模式">
-            <NRadioGroup v-model:value="agentForm.promptMode">
-              <NSpace>
-                <NRadio value="single" @click="loadInlinePrompt(agentForm.prompt ?? '')">单一文件</NRadio>
-                <NRadio value="multi" @click="() => { inlinePromptContent = ''; activeMultiIdx = null }">按技术栈</NRadio>
-              </NSpace>
-            </NRadioGroup>
-          </NFormItem>
-
-          <!-- single 模式 -->
-          <template v-if="agentForm.promptMode === 'single'">
-            <NFormItem label="指令文件路径">
-              <NSpace :wrap="false">
-                <NInput v-model:value="agentForm.prompt" placeholder="SDDInAction/2.spec/spec-prompt.md" style="flex:1;" />
-                <NButton size="small" @click="openFilePicker('single')">浏览</NButton>
-              </NSpace>
-            </NFormItem>
-          </template>
-
-          <!-- multi 模式 -->
-          <template v-else>
-            <NFormItem label="技术栈 → 指令文件">
-              <div style="display:flex;flex-direction:column;gap:6px;width:100%;">
-                <div v-for="(entry, idx) in multiPromptEntries" :key="idx" style="display:flex;gap:4px;align-items:center;">
-                  <NInput v-model:value="entry.key" placeholder="ts" style="width:60px;flex-shrink:0;" />
-                  <span style="color:#aaa;font-size:12px;">→</span>
-                  <NInput v-model:value="entry.value" placeholder="文件路径" style="flex:1;" />
-                  <NButton size="tiny" @click="openFilePicker(idx)">浏览</NButton>
-                  <NButton size="tiny"
-                    :type="activeMultiIdx === idx ? 'primary' : 'default'"
-                    @click="selectMultiEntry(idx)">✎</NButton>
-                  <NButton size="tiny" type="error" ghost @click="removeMultiEntry(idx)">✕</NButton>
-                </div>
-                <NButton text style="font-size:12px;" @click="addMultiEntry">+ 添加技术栈</NButton>
-              </div>
-            </NFormItem>
-          </template>
         </NForm>
 
         <div style="margin-top:auto;padding-top:12px;">
@@ -657,47 +499,13 @@ function selectFile(file: string) {
       <!-- 右：指令内容编辑器 -->
       <div style="flex:1;display:flex;flex-direction:column;overflow:hidden;background:#1e1e2e;">
         <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 16px;border-bottom:1px solid #2d2d3f;background:#1a1a2e;flex-shrink:0;">
-          <NText style="color:#94a3b8;font-size:13px;">
-            指令内容
-            <span v-if="agentForm.promptMode === 'multi' && activeMultiIdx !== null" style="color:#818cf8;margin-left:4px;">
-              [{{ multiPromptEntries[activeMultiIdx!]?.key || '未命名' }}]
-            </span>
-          </NText>
-          <NButton size="small" type="primary"
-            :loading="inlinePromptSaving"
-            :disabled="!inlinePromptContent"
-            @click="saveInlinePrompt">保存文件</NButton>
+          <NText style="color:#94a3b8;font-size:13px;">指令内容</NText>
+          <NText style="color:#555;font-size:11px;">点击「保存 Agent」后内容随配置一起保存</NText>
         </div>
         <div style="flex:1;overflow:hidden;">
-          <div v-if="agentForm.promptMode === 'multi' && activeMultiIdx === null"
-            style="height:100%;display:flex;align-items:center;justify-content:center;color:#555;font-size:14px;">
-            ← 点击左侧 ✎ 按钮编辑对应技术栈的指令文件
-          </div>
-          <MarkdownEditor v-else v-model="inlinePromptContent" style="height:100%;border-radius:0;border:none;" />
+          <MarkdownEditor v-model="agentForm.instruction" style="height:100%;border-radius:0;border:none;" />
         </div>
       </div>
     </div>
-  </NModal>
-
-  <!-- ─── 文件浏览器弹窗 ─── -->
-  <NModal v-model:show="filePickerOpen">
-    <NCard title="选择提示词文件" closable style="width:580px;background:#fff;"
-      @close="filePickerOpen = false">
-      <NInput v-model:value="filePickerFilter" placeholder="输入关键字过滤..." style="margin-bottom:10px;" />
-      <div style="border:1px solid #efeff5;border-radius:6px;max-height:320px;overflow-y:auto;">
-        <NEmpty v-if="filteredFiles.length === 0" description="无匹配文件" style="padding:24px 0;" />
-        <div v-for="f in filteredFiles" :key="f"
-          style="padding:8px 12px;cursor:pointer;font-size:12px;font-family:monospace;color:#374151;border-bottom:1px solid #f5f5f5;"
-          @click="selectFile(f)"
-          @mouseover="($event.target as HTMLElement).style.background='#f0f0ff'"
-          @mouseleave="($event.target as HTMLElement).style.background='transparent'"
-        >{{ f }}</div>
-      </div>
-      <template #footer>
-        <NSpace justify="end">
-          <NButton @click="filePickerOpen = false">取消</NButton>
-        </NSpace>
-      </template>
-    </NCard>
   </NModal>
 </template>
