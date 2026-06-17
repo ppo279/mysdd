@@ -45,6 +45,11 @@ export async function* spawnCliStream(
   })
   if (spawnError) throw new Error(`无法启动 "${command}"：${spawnError.message}。请确认已安装并在 PATH 中，或在运行时配置中填写完整路径。`)
 
+  // 必须持续读 stderr，否则管道缓冲区写满会导致子进程阻塞，stdout 停止输出
+  proc.stderr?.on('data', (chunk: Buffer) => {
+    process.stderr.write(`[${command} stderr] ${chunk.toString()}`)
+  })
+
   let buffer = ''
   const decoder = new TextDecoder()
 
@@ -56,6 +61,8 @@ export async function* spawnCliStream(
     for (const line of lines) {
       const trimmed = line.trim()
       if (!trimmed) continue
+      // 调试：打印原始行，帮助确认事件格式
+      process.stderr.write(`[${command} stdout] ${trimmed}\n`)
       try {
         const event: StreamEvent = JSON.parse(trimmed)
 
