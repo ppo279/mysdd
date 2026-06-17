@@ -1,5 +1,8 @@
 import { spawn } from 'child_process'
 import os from 'os'
+import fs from 'fs'
+import path from 'path'
+import { randomUUID } from 'crypto'
 import type { RuntimeAdapter, SendResult } from './adapter.js'
 
 // stream-json 输出的事件结构（claude-code 兼容格式）
@@ -19,6 +22,14 @@ function cliLog(...args: string[]) {
   process.stderr.write(args.join(' ') + '\n')
 }
 
+// Write content to a temp file and return its path.
+// Used to pass system prompts without going through shell argument quoting.
+export function writeTempFile(content: string, prefix = 'sdd-'): string {
+  const p = path.join(os.tmpdir(), `${prefix}${randomUUID()}.txt`)
+  fs.writeFileSync(p, content, 'utf-8')
+  return p
+}
+
 // 共享 spawn 工具：支持可选的 stdin 内容（用于无 --system 标志的 CLI）
 // Windows 下必须用 shell:true 才能正确执行 .cmd 包装脚本并保持参数完整性
 export async function* spawnCliStream(
@@ -26,6 +37,7 @@ export async function* spawnCliStream(
   args: string[],
   stdinContent?: string,
   cwd?: string,
+  cleanupFiles?: string[],   // temp files to delete after the process exits
 ): AsyncIterable<{ sessionId?: string; text?: string }> {
   // Default to home dir so the CLI doesn't pick up any project CLAUDE.md.
   // Callers pass the workspace localPath when they want the agent to work inside a project.
@@ -111,6 +123,10 @@ export async function* spawnCliStream(
   await new Promise<void>((resolve, reject) => {
     proc.on('close', (code) => {
       cliLog(`[CLI exit] code=${code}, stdout lines=${lineCount}${stderrLines.length ? `, stderr lines=${stderrLines.length}` : ''}`)
+      // Clean up temp files (system prompt etc.) now that the process has finished
+      for (const f of cleanupFiles ?? []) {
+        try { fs.unlinkSync(f) } catch { /* already gone */ }
+      }
       if (code === 0) {
         resolve()
       } else {
@@ -189,14 +205,25 @@ export class ClaudeAdapter implements RuntimeAdapter {
   constructor(private command: string = 'claude') {}
 
   async createSession(systemPrompt: string, firstMessage: string, cwd?: string): Promise<SendResult> {
-    const args: string[] = ['--output-format', 'stream-json', '--verbose']
-    if (systemPrompt.trim()) args.push('--system-prompt', systemPrompt)
-    return wrapSessionStream(spawnCliStream(this.command, args, firstMessage, cwd), this.command)
+    // Use --print to trigger non-interactive mode (enables stream-json + verbose streaming)
+    const args: string[] = ['--print', '--output-format', 'stream-json', '--verbose']
+    const cleanupFiles: string[] = []
+
+    if (systemPrompt.trim()) {
+      // Write system prompt to a temp file to avoid Windows cmd.exe argument quoting issues.
+      // --system-prompt "<multiline>" breaks on Windows; --system-prompt-file <path> does not.
+      const tmpFile = writeTempFile(systemPrompt, 'sdd-system-')
+      args.push('--system-prompt-file', tmpFile)
+      cleanupFiles.push(tmpFile)
+      if (DEBUG) cliLog(`[CLI] system prompt written to temp file: ${tmpFile}`)
+    }
+
+    return wrapSessionStream(spawnCliStream(this.command, args, firstMessage, cwd, cleanupFiles), this.command)
   }
 
   resumeSession(sessionId: string, message: string, cwd?: string): AsyncIterable<string> {
     const cmd = this.command
-    const args = ['--resume', sessionId, '--output-format', 'stream-json', '--verbose']
+    const args = ['--print', '--resume', sessionId, '--output-format', 'stream-json', '--verbose']
     async function* s() {
       for await (const e of spawnCliStream(cmd, args, message, cwd)) if (e.text) yield e.text
     }

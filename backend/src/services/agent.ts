@@ -2,7 +2,7 @@ import { eq, asc } from 'drizzle-orm'
 import { db } from '../db/index.js'
 import { stageRuns, messages, features, workspaces } from '../db/schema.js'
 import { getRuntime } from '../runtime/registry.js'
-import { buildSystemPrompt, buildUpstreamContext, getAgentConfig } from '../config/agents.js'
+import { buildSystemPrompt, buildUpstreamContext, getAgentConfig, type FeatureContext } from '../config/agents.js'
 import { ArtifactService } from './artifact.js'
 import { randomUUID } from 'crypto'
 import path from 'path'
@@ -39,10 +39,11 @@ export class AgentService {
     firstMessage: string,
     runtimeId: string = 'claude',
     localPath?: string,
+    featureCtx?: FeatureContext,
   ): Promise<{ stageRunId: string; stream: AsyncIterable<string> }> {
     const artifacts = await this.getApprovedArtifacts(featureId)
     const upstreamCtx = buildUpstreamContext(stage, artifacts)
-    const systemPrompt = buildSystemPrompt(stage, techStack, background) + upstreamCtx
+    const systemPrompt = buildSystemPrompt(stage, techStack, background, featureCtx) + upstreamCtx
 
     const runtime = getRuntime(runtimeId)
     const { sessionId, stream } = await runtime.createSession(systemPrompt, firstMessage, localPath || undefined)

@@ -76,11 +76,21 @@ export function getAgentConfig(agentId: string): AgentConfig {
   return agent
 }
 
+export interface FeatureContext {
+  name: string
+  description: string
+}
+
 // ── 系统提示拼装（三层）────────────────────────────────────────
 // Layer 1: global.base_layers（所有 Agent 共享，inline 内容）
-// Layer 2: agent instruction（inline 内容）
+// Layer 2: agent instruction（inline 内容）- 占位符 [项目名称] [想法描述] 被替换
 // Layer 3: workspace 背景（运行时注入）
-export function buildSystemPrompt(agentId: string, _techStack: string, workspaceBackground: string): string {
+export function buildSystemPrompt(
+  agentId: string,
+  _techStack: string,
+  workspaceBackground: string,
+  featureCtx?: FeatureContext,
+): string {
   const { global: globalCfg } = loadAgentsConfig()
   const agent = getAgentConfig(agentId)
 
@@ -91,8 +101,16 @@ export function buildSystemPrompt(agentId: string, _techStack: string, workspace
     if (layer.content?.trim()) parts.push(layer.content)
   }
 
-  // Layer 2: 角色层
-  if (agent.instruction.trim()) parts.push(agent.instruction)
+  // Layer 2: 角色层（替换占位符）
+  if (agent.instruction.trim()) {
+    let instruction = agent.instruction
+    if (featureCtx) {
+      instruction = instruction
+        .replaceAll('[项目名称]', featureCtx.name)
+        .replaceAll('[想法描述]', featureCtx.description || featureCtx.name)
+    }
+    parts.push(instruction)
+  }
 
   // Layer 3: 运行时背景
   if (workspaceBackground.trim()) {

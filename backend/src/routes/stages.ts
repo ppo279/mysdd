@@ -64,6 +64,7 @@ export async function stageRoutes(app: FastifyInstance) {
         body.firstMessage,
         body.runtimeId,
         workspace.localPath || undefined,
+        { name: feature.name, description: feature.description },
       )
 
       // First event carries the stageRunId so the frontend can track the run
