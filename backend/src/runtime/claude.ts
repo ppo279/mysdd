@@ -11,12 +11,16 @@ interface StreamEvent {
   result?: string
 }
 
-// Windows 下 nvm 全局包的入口是 .cmd 包装脚本，需要加后缀才能不依赖 shell
-function resolveCommand(command: string): string {
-  if (process.platform !== 'win32') return command
-  // 有路径分隔符或已带扩展名，直接使用
-  if (command.includes('/') || command.includes('\\') || command.includes('.')) return command
-  return command + '.cmd'
+// Windows 下 .cmd 文件必须通过 cmd.exe 执行。
+// 用 cmd.exe /c + 数组 args 形式，Node.js 负责 CreateProcess 级别的转义，
+// 比 shell:true（字符串拼接）更安全。
+function buildSpawnTarget(command: string, args: string[]): { file: string; args: string[] } {
+  if (process.platform !== 'win32') return { file: command, args }
+  // 已有路径或扩展名（如 .exe 全路径）直接执行
+  if (command.includes('/') || command.includes('\\') || /\.\w+$/.test(command)) {
+    return { file: command, args }
+  }
+  return { file: 'cmd.exe', args: ['/c', command, ...args] }
 }
 
 // 共享 spawn 工具：支持可选的 stdin 内容（用于无 --system 标志的 CLI）
@@ -25,7 +29,8 @@ export async function* spawnCliStream(
   args: string[],
   stdinContent?: string,
 ): AsyncIterable<{ sessionId?: string; text?: string }> {
-  const proc = spawn(resolveCommand(command), args, {
+  const target = buildSpawnTarget(command, args)
+  const proc = spawn(target.file, target.args, {
     stdio: [stdinContent !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
     shell: false,
   })
