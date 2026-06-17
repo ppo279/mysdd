@@ -39,6 +39,7 @@ export async function* spawnCliStream(
 
   let buffer = ''
   const decoder = new TextDecoder()
+  let hasStreamedText = false
 
   for await (const chunk of proc.stdout!) {
     buffer += decoder.decode(chunk as Buffer, { stream: true })
@@ -54,10 +55,13 @@ export async function* spawnCliStream(
         if (event.session_id) yield { sessionId: event.session_id }
 
         if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+          hasStreamedText = true
           yield { text: event.delta.text }
         }
 
-        if (event.type === 'result' && event.result) {
+        // Only fall back to result text when no streaming deltas were received
+        // (--verbose omitted or CLI version that batches output)
+        if (event.type === 'result' && event.result && !hasStreamedText) {
           yield { text: event.result }
         }
       } catch {
@@ -144,17 +148,19 @@ export class ClaudeAdapter implements RuntimeAdapter {
   constructor(private command: string = 'claude') {}
 
   async createSession(systemPrompt: string, firstMessage: string): Promise<SendResult> {
-    const args: string[] = ['-p', firstMessage]
+    // Pipe firstMessage via stdin instead of deprecated -p flag.
+    // A non-tty stdin pipe signals non-interactive (print) mode to the CLI,
+    // which ensures --output-format stream-json is respected.
+    const args: string[] = ['--output-format', 'stream-json', '--verbose']
     if (systemPrompt.trim()) args.push('--system-prompt', systemPrompt)
-    args.push('--output-format', 'stream-json', '--verbose')
-    return wrapSessionStream(spawnCliStream(this.command, args), this.command)
+    return wrapSessionStream(spawnCliStream(this.command, args, firstMessage), this.command)
   }
 
   resumeSession(sessionId: string, message: string): AsyncIterable<string> {
     const cmd = this.command
-    const args = ['--resume', sessionId, '-p', message, '--output-format', 'stream-json', '--verbose']
+    const args = ['--resume', sessionId, '--output-format', 'stream-json', '--verbose']
     async function* s() {
-      for await (const e of spawnCliStream(cmd, args)) if (e.text) yield e.text
+      for await (const e of spawnCliStream(cmd, args, message)) if (e.text) yield e.text
     }
     return s()
   }

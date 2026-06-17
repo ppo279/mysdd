@@ -7,17 +7,17 @@ export class CodefreeAdapter implements RuntimeAdapter {
   constructor(private command: string = 'codefree') {}
 
   async createSession(systemPrompt: string, firstMessage: string): Promise<SendResult> {
-    const args = ['-p', firstMessage, '--output-format', 'stream-json']
-    // 通过 stdin 传入系统提示（codefree 会将 stdin 内容拼接在 -p 之前）
-    const stdinContent = systemPrompt.trim() ? systemPrompt : undefined
-    return wrapSessionStream(spawnCliStream(this.command, args, stdinContent), this.command)
+    // Codefree has no --system-prompt flag; pipe both parts via stdin to trigger print mode
+    const args = ['--output-format', 'stream-json']
+    const parts = systemPrompt.trim() ? [systemPrompt, firstMessage] : [firstMessage]
+    return wrapSessionStream(spawnCliStream(this.command, args, parts.join('\n\n')), this.command)
   }
 
   resumeSession(sessionId: string, message: string): AsyncIterable<string> {
     const cmd = this.command
-    const args = ['--resume', sessionId, '-p', message, '--output-format', 'stream-json']
+    const args = ['--resume', sessionId, '--output-format', 'stream-json']
     async function* s() {
-      for await (const e of spawnCliStream(cmd, args)) if (e.text) yield e.text
+      for await (const e of spawnCliStream(cmd, args, message)) if (e.text) yield e.text
     }
     return s()
   }
