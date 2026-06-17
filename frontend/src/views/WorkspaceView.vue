@@ -5,7 +5,7 @@ import { api, type WorkspaceDetail, type Feature } from '@/api'
 import {
   NLayout, NLayoutHeader, NLayoutContent, NSpace, NButton, NText, NEmpty, NSpin,
   NModal, NCard, NForm, NFormItem, NInput, NTag, NBreadcrumb, NBreadcrumbItem,
-  NList, NListItem, NThing, useMessage,
+  NList, NListItem, NThing, NPopconfirm, useMessage,
 } from 'naive-ui'
 
 const router = useRouter()
@@ -17,6 +17,7 @@ const detail = ref<WorkspaceDetail | null>(null)
 const showCreate = ref(false)
 const creating = ref(false)
 const newFeature = ref({ name: '', description: '' })
+const deletingId = ref<string | null>(null)
 
 const STAGE_LABELS: Record<string, string> = {
   spec: 'Spec', plan: 'Plan', tasks: 'Tasks', coding: 'Coding',
@@ -49,6 +50,20 @@ async function handleCreateFeature() {
     message.error(e.message)
   } finally {
     creating.value = false
+  }
+}
+
+async function handleDeleteFeature(feature: Feature) {
+  if (!detail.value) return
+  deletingId.value = feature.id
+  try {
+    await api.features.delete(feature.id)
+    detail.value.features = detail.value.features.filter((f) => f.id !== feature.id)
+    message.success(`已删除 Feature「${feature.name}」`)
+  } catch (e: any) {
+    message.error(e.message)
+  } finally {
+    deletingId.value = null
   }
 }
 </script>
@@ -99,11 +114,29 @@ async function handleCreateFeature() {
           >
             <NThing :title="feature.name" :description="feature.description || '无描述'">
               <template #header-extra>
-                <NSpace align="center">
+                <NSpace align="center" :size="6">
                   <NTag v-if="feature.status === 'done'" type="success" size="small" round>完成</NTag>
                   <NTag :type="STAGE_TYPES[feature.currentStage] ?? 'default'" size="small">
                     {{ STAGE_LABELS[feature.currentStage] ?? feature.currentStage }}
                   </NTag>
+                  <NPopconfirm
+                    @positive-click="handleDeleteFeature(feature)"
+                    :positive-button-props="{ loading: deletingId === feature.id, type: 'error' }"
+                  >
+                    <template #trigger>
+                      <NButton
+                        size="tiny"
+                        quaternary
+                        type="error"
+                        :loading="deletingId === feature.id"
+                        @click.stop
+                      >
+                        删除
+                      </NButton>
+                    </template>
+                    确定删除 Feature「{{ feature.name }}」？<br/>
+                    该操作不可恢复，所有阶段产物和对话历史都会被清除。
+                  </NPopconfirm>
                 </NSpace>
               </template>
             </NThing>

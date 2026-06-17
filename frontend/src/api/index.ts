@@ -40,6 +40,8 @@ export const api = {
       request<{ currentStage: string; status: string }>(`/api/features/${featureId}/advance`, {
         method: 'POST',
       }),
+    delete: (featureId: string) =>
+      request<void>(`/api/features/${featureId}`, { method: 'DELETE' }),
   },
 
   stages: {
@@ -66,10 +68,27 @@ export const api = {
 
 // SSE 流式调用封装（POST + SSE）
 // stageRunId 从第一个 SSE 事件中读取（不再从 HTTP header 读）
+// 通过 handlers 回调把 text / thinking / tool / error 四类事件分桶
+export interface StreamHandlers {
+  onText: (text: string) => void
+  onThinking?: (info: {
+    text?: string
+    tokensDelta?: number
+    tokensTotal?: number
+  }) => void
+  onTool?: (info: {
+    phase: 'start' | 'end'
+    name: string
+    toolUseId?: string
+    input?: unknown
+  }) => void
+  onError?: (msg: string) => void
+}
+
 export async function streamPost(
   url: string,
   body: Record<string, unknown>,
-  onChunk: (text: string) => void,
+  handlers: StreamHandlers,
 ): Promise<{ stageRunId?: string }> {
   const res = await fetch(url, {
     method: 'POST',
@@ -95,8 +114,14 @@ export async function streamPost(
       let data: any
       try { data = JSON.parse(line.slice(6)) } catch { continue }
       if (data.stageRunId) stageRunId = data.stageRunId
-      if (data.text) onChunk(data.text)
-      if (data.error) throw new Error(data.error as string)
+      if (typeof data.text === 'string') handlers.onText(data.text)
+      if (data.thinking && handlers.onThinking) handlers.onThinking(data.thinking)
+      if (data.tool && handlers.onTool) handlers.onTool(data.tool)
+      if (data.error) {
+        const msg = data.error as string
+        if (handlers.onError) handlers.onError(msg)
+        else throw new Error(msg)
+      }
     }
   }
 

@@ -39,9 +39,17 @@ onMounted(async () => {
   scrollToBottom()
 })
 
-watch([() => chat.messages.length, () => chat.streamingText], () => {
-  nextTick(scrollToBottom)
-})
+watch(
+  [
+    () => chat.messages.length,
+    () => chat.streamingText,
+    () => chat.thinkingText,
+    () => chat.thinkingTokens,
+  ],
+  () => {
+    nextTick(scrollToBottom)
+  },
+)
 
 function scrollToBottom() {
   chatScrollRef.value?.scrollTo({ top: 999999, behavior: 'smooth' })
@@ -167,6 +175,27 @@ function onKeydown(e: KeyboardEvent) {
                 color: msg.role === 'user' ? '#fff' : '#1a1a2e',
                 borderRadius: msg.role === 'user' ? '10px 10px 2px 10px' : '10px 10px 10px 2px',
               }">{{ msg.content }}</div>
+            </div>
+
+            <!-- 思考中气泡（thinking / tool 进度） -->
+            <div v-if="chat.isStreaming && (chat.thinkingTokens || chat.thinkingText || chat.activeTool || chat.toolLog.length)"
+              style="display:flex; flex-direction:column; gap:4px; max-width:88%; align-self:flex-start;">
+              <NText depth="3" style="font-size:12px;">Agent · 思考中</NText>
+              <div style="padding:10px 14px; border-radius:10px 10px 10px 2px; background:#f7f7ff;
+                         font-size:13px; line-height:1.6; white-space:pre-wrap; word-break:break-word;
+                         border:1px dashed #c8c8e8;">
+                <div style="color:#666; margin-bottom:6px; display:flex; flex-wrap:wrap; gap:6px 10px; align-items:center;">
+                  <span>💭 思考中...</span>
+                  <span v-if="chat.thinkingTokens > 0" style="color:#888;">≈ {{ chat.thinkingTokens }} tokens</span>
+                  <span v-if="chat.activeTool" style="color:#2080f0;">
+                    🔧 {{ chat.activeTool.name }}
+                  </span>
+                  <span v-for="(t, i) in chat.toolLog" :key="i" style="color:#18a058;">
+                    ✓ {{ t.name }}
+                  </span>
+                </div>
+                <div v-if="chat.thinkingText" style="color:#444;">{{ chat.thinkingText }}<span style="animation: blink 1s step-end infinite;">▊</span></div>
+              </div>
             </div>
 
             <!-- 流式输出 -->

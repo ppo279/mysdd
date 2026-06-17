@@ -3,15 +3,34 @@ import os from 'os'
 import fs from 'fs'
 import path from 'path'
 import { randomUUID } from 'crypto'
-import type { RuntimeAdapter, SendResult } from './adapter.js'
+import type {
+  RuntimeAdapter,
+  SendResult,
+  StreamChunk,
+} from './adapter.js'
 
 // stream-json 输出的事件结构（claude-code 兼容格式）
 interface StreamEvent {
   type: string
   subtype?: string
   session_id?: string
-  delta?: { type: string; text: string }
-  message?: { content: Array<{ type: string; text: string }> }
+  delta?: { type: string; text?: string; thinking?: string; partial_json?: string }
+  index?: number
+  content_block?: {
+    type: string
+    id?: string
+    name?: string
+    input?: unknown
+  }
+  message?: {
+    content?: Array<
+      | { type: 'text'; text: string }
+      | { type: 'thinking'; thinking: string }
+      | { type: 'tool_use'; id: string; name: string; input: unknown }
+    >
+  }
+  estimated_tokens?: number
+  estimated_tokens_delta?: number
   result?: string
 }
 
@@ -32,13 +51,18 @@ export function writeTempFile(content: string, prefix = 'sdd-'): string {
 
 // 共享 spawn 工具：支持可选的 stdin 内容（用于无 --system 标志的 CLI）
 // Windows 下必须用 shell:true 才能正确执行 .cmd 包装脚本并保持参数完整性
+//
+// Yield 格式：内部协议用 SpawnOutput，把 sessionId 单独作为"meta"事件传出，
+// 其余字段遵循 StreamChunk，方便 wrapSessionStream 透传。
+export type SpawnOutput = { sessionId: string } | StreamChunk
+
 export async function* spawnCliStream(
   command: string,
   args: string[],
   stdinContent?: string,
   cwd?: string,
-  cleanupFiles?: string[],   // temp files to delete after the process exits
-): AsyncIterable<{ sessionId?: string; text?: string }> {
+  cleanupFiles?: string[], // temp files to delete after the process exits
+): AsyncIterable<SpawnOutput> {
   // Default to home dir so the CLI doesn't pick up any project CLAUDE.md.
   // Callers pass the workspace localPath when they want the agent to work inside a project.
   const resolvedCwd = cwd ?? os.homedir()
@@ -46,11 +70,16 @@ export async function* spawnCliStream(
   if (DEBUG) {
     cliLog(`[CLI] spawn: ${command} ${args.join(' ')}`)
     cliLog(`[CLI] cwd:   ${resolvedCwd}`)
-    if (stdinContent) cliLog(`[CLI] stdin: ${stdinContent.slice(0, 120).replace(/\n/g, '↵')}`)
+    if (stdinContent)
+      cliLog(`[CLI] stdin: ${stdinContent.slice(0, 120).replace(/\n/g, '↵')}`)
   }
 
   const proc = spawn(command, args, {
-    stdio: [stdinContent !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+    stdio: [
+      stdinContent !== undefined ? 'pipe' : 'ignore',
+      'pipe',
+      'pipe',
+    ],
     shell: process.platform === 'win32',
     cwd: resolvedCwd,
   })
@@ -63,7 +92,10 @@ export async function* spawnCliStream(
     proc.once('error', (err) => resolve(err))
     proc.once('spawn', () => resolve(null))
   })
-  if (spawnError) throw new Error(`无法启动 "${command}"：${spawnError.message}。请确认已安装并在 PATH 中，或在运行时配置中填写完整路径。`)
+  if (spawnError)
+    throw new Error(
+      `无法启动 "${command}"：${spawnError.message}。请确认已安装并在 PATH 中，或在运行时配置中填写完整路径。`,
+    )
 
   if (DEBUG) cliLog(`[CLI] process spawned (pid ${proc.pid})`)
 
@@ -80,6 +112,12 @@ export async function* spawnCliStream(
   let hasStreamedText = false
   let lineCount = 0
 
+  // 跟踪正在进行的 tool_use（用 index 区分），把 input_json_delta 累积起来
+  const pendingTools = new Map<
+    number,
+    { id?: string; name?: string; inputParts: string[] }
+  >()
+
   for await (const chunk of proc.stdout!) {
     buffer += decoder.decode(chunk as Buffer, { stream: true })
     const lines = buffer.split('\n')
@@ -91,7 +129,8 @@ export async function* spawnCliStream(
       lineCount++
 
       if (DEBUG) {
-        const preview = trimmed.length > 160 ? trimmed.slice(0, 160) + '…' : trimmed
+        const preview =
+          trimmed.length > 160 ? trimmed.slice(0, 160) + '…' : trimmed
         cliLog(`[CLI stdout #${lineCount}] ${preview}`)
       }
 
@@ -100,17 +139,88 @@ export async function* spawnCliStream(
 
         if (event.session_id) yield { sessionId: event.session_id }
 
-        if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
-          hasStreamedText = true
-          if (DEBUG) cliLog(`[CLI delta] "${event.delta.text.slice(0, 60)}"`)
-          yield { text: event.delta.text }
+        // ── thinking_tokens：累计 token 数（CLI 周期上报） ─────
+        if (
+          event.type === 'system' &&
+          event.subtype === 'thinking_tokens'
+        ) {
+          yield {
+            kind: 'thinking',
+            tokensDelta: event.estimated_tokens_delta,
+            tokensTotal: event.estimated_tokens,
+          }
         }
 
-        // Only fall back to result text when no streaming deltas were received
-        // (--verbose omitted or CLI version that batches output)
+        // ── content_block_start：开一个新 block（thinking 或 tool_use） ─
+        if (event.type === 'content_block_start' && event.content_block) {
+          const cb = event.content_block
+          const idx = event.index ?? -1
+          if (cb.type === 'tool_use') {
+            pendingTools.set(idx, {
+              id: cb.id,
+              name: cb.name,
+              inputParts: [],
+            })
+            yield {
+              kind: 'tool',
+              phase: 'start',
+              name: cb.name ?? '',
+              toolUseId: cb.id,
+              input: cb.input,
+            }
+          }
+        }
+
+        // ── content_block_delta：text / thinking / input_json ─
+        if (event.type === 'content_block_delta' && event.delta) {
+          const d = event.delta
+          if (d.type === 'text_delta' && d.text) {
+            hasStreamedText = true
+            if (DEBUG) cliLog(`[CLI delta] "${d.text.slice(0, 60)}"`)
+            yield { kind: 'text', text: d.text }
+          } else if (d.type === 'thinking_delta' && d.thinking) {
+            yield { kind: 'thinking', text: d.thinking }
+          } else if (d.type === 'input_json_delta' && d.partial_json) {
+            const idx = event.index ?? -1
+            const slot = pendingTools.get(idx)
+            if (slot) slot.inputParts.push(d.partial_json)
+          }
+        }
+
+        // ── content_block_stop：关闭一个 block；若是 tool_use，发 end ─
+        if (event.type === 'content_block_stop') {
+          const idx = event.index ?? -1
+          const slot = pendingTools.get(idx)
+          if (slot) {
+            let input: unknown = slot.inputParts.length
+              ? safeParseJsonOrRaw(slot.inputParts.join(''))
+              : undefined
+            // 如果 input 是空字符串（CLI 偶尔发 ""），降级为 undefined
+            if (input === '' || input === null) input = undefined
+            yield {
+              kind: 'tool',
+              phase: 'end',
+              name: slot.name ?? '',
+              toolUseId: slot.id,
+              input,
+            }
+            pendingTools.delete(idx)
+          }
+        }
+
+        // ── assistant 整体消息：补抓 thinking / tool_use（无 delta 时的兜底） ─
+        if (event.type === 'assistant' && event.message?.content) {
+          for (const block of event.message.content) {
+            if (block.type === 'thinking') {
+              yield { kind: 'thinking', text: block.thinking }
+            }
+          }
+        }
+
+        // ── result 兜底：未流到 delta 时回填 ───────────────
         if (event.type === 'result' && event.result && !hasStreamedText) {
           if (DEBUG) cliLog(`[CLI result-fallback] ${event.result.slice(0, 80)}`)
-          yield { text: event.result }
+          yield { kind: 'text', text: event.result }
         }
       } catch {
         // 非 JSON 行，记录供出错时诊断
@@ -122,25 +232,42 @@ export async function* spawnCliStream(
 
   await new Promise<void>((resolve, reject) => {
     proc.on('close', (code) => {
-      cliLog(`[CLI exit] code=${code}, stdout lines=${lineCount}${stderrLines.length ? `, stderr lines=${stderrLines.length}` : ''}`)
+      cliLog(
+        `[CLI exit] code=${code}, stdout lines=${lineCount}${stderrLines.length ? `, stderr lines=${stderrLines.length}` : ''}`,
+      )
       // Clean up temp files (system prompt etc.) now that the process has finished
       for (const f of cleanupFiles ?? []) {
-        try { fs.unlinkSync(f) } catch { /* already gone */ }
+        try {
+          fs.unlinkSync(f)
+        } catch {
+          /* already gone */
+        }
       }
       if (code === 0) {
         resolve()
       } else {
-        if (stderrLines.length) process.stderr.write(`[${command} stderr]\n${stderrLines.join('')}\n`)
+        if (stderrLines.length)
+          process.stderr.write(`[${command} stderr]\n${stderrLines.join('')}\n`)
         reject(new Error(`"${command}" exited with code ${code}`))
       }
     })
   })
 }
 
+// input_json_delta 拼起来可能不是严格合法 JSON（例如尾逗号、截断），
+// 这里尽量解析，失败就回退成字符串。
+function safeParseJsonOrRaw(s: string): unknown {
+  try {
+    return JSON.parse(s)
+  } catch {
+    return s
+  }
+}
+
 // 共享的 sessionId 提取 + 流包装逻辑
 // 用后台 IIFE 持续消费 source，将文本放入 buffer，避免因生成器暂停导致 session_id 事件永远读不到
 export async function wrapSessionStream(
-  source: AsyncIterable<{ sessionId?: string; text?: string }>,
+  source: AsyncIterable<SpawnOutput>,
   commandName: string,
 ): Promise<SendResult> {
   let sessionResolve!: (id: string) => void
@@ -150,7 +277,8 @@ export async function wrapSessionStream(
     sessionReject = rej
   })
 
-  const buffer: string[] = []
+  // 按到达顺序缓存所有 chunk；恢复消费时按 FIFO yield
+  const queue: StreamChunk[] = []
   let done = false
   let streamError: Error | undefined
   let notify: (() => void) | undefined
@@ -160,25 +288,35 @@ export async function wrapSessionStream(
     try {
       let sessionFound = false
       for await (const event of source) {
-        if (event.sessionId && !sessionFound) {
-          sessionFound = true
-          if (DEBUG) cliLog(`[wrap] session_id resolved: ${event.sessionId}`)
-          sessionResolve(event.sessionId)
+        // meta 事件：sessionId，不入队
+        if ('sessionId' in event) {
+          if (!sessionFound) {
+            sessionFound = true
+            if (DEBUG) cliLog(`[wrap] session_id resolved: ${event.sessionId}`)
+            sessionResolve(event.sessionId)
+          }
+          continue
         }
-        if (event.text) {
-          if (DEBUG) cliLog(`[wrap] buffered text len=${event.text.length}`)
-          buffer.push(event.text)
-          notify?.()
-          notify = undefined
+        if (DEBUG) {
+          if (event.kind === 'text')
+            cliLog(`[wrap] buffered text len=${event.text.length}`)
+          else if (event.kind === 'thinking')
+            cliLog(`[wrap] buffered thinking tokens=${event.tokensTotal ?? '-'}`)
+          else if (event.kind === 'tool')
+            cliLog(`[wrap] buffered tool ${event.phase} ${event.name}`)
         }
+        queue.push(event)
+        notify?.()
+        notify = undefined
       }
-      if (!sessionFound) sessionReject(new Error(`${commandName} CLI did not return a session_id`))
+      if (!sessionFound)
+        sessionReject(new Error(`${commandName} CLI did not return a session_id`))
     } catch (e) {
       streamError = e as Error
       sessionReject(e as Error)
     } finally {
       done = true
-      if (DEBUG) cliLog(`[wrap] source done, buffer size=${buffer.length}`)
+      if (DEBUG) cliLog(`[wrap] source done, queue size=${queue.length}`)
       notify?.()
       notify = undefined
     }
@@ -187,13 +325,15 @@ export async function wrapSessionStream(
   // 等待 session_id（后台 IIFE 正在驱动 source，不会死锁）
   const sessionId = await sessionIdPromise
 
-  // 返回从 buffer 读取的流
-  async function* stream(): AsyncIterable<string> {
+  // 返回从 queue 读取的流，按 FIFO 透传所有 chunk
+  async function* stream(): AsyncIterable<StreamChunk> {
     let idx = 0
     while (true) {
-      while (idx < buffer.length) yield buffer[idx++]
+      while (idx < queue.length) yield queue[idx++]
       if (done) break
-      await new Promise<void>((r) => { notify = r })
+      await new Promise<void>((r) => {
+        notify = r
+      })
     }
     if (streamError) throw streamError
   }
@@ -204,9 +344,18 @@ export async function wrapSessionStream(
 export class ClaudeAdapter implements RuntimeAdapter {
   constructor(private command: string = 'claude') {}
 
-  async createSession(systemPrompt: string, firstMessage: string, cwd?: string): Promise<SendResult> {
+  async createSession(
+    systemPrompt: string,
+    firstMessage: string,
+    cwd?: string,
+  ): Promise<SendResult> {
     // Use --print to trigger non-interactive mode (enables stream-json + verbose streaming)
-    const args: string[] = ['--print', '--output-format', 'stream-json', '--verbose']
+    const args: string[] = [
+      '--print',
+      '--output-format',
+      'stream-json',
+      '--verbose',
+    ]
     const cleanupFiles: string[] = []
 
     if (systemPrompt.trim()) {
@@ -218,14 +367,31 @@ export class ClaudeAdapter implements RuntimeAdapter {
       if (DEBUG) cliLog(`[CLI] system prompt written to temp file: ${tmpFile}`)
     }
 
-    return wrapSessionStream(spawnCliStream(this.command, args, firstMessage, cwd, cleanupFiles), this.command)
+    return wrapSessionStream(
+      spawnCliStream(this.command, args, firstMessage, cwd, cleanupFiles),
+      this.command,
+    )
   }
 
-  resumeSession(sessionId: string, message: string, cwd?: string): AsyncIterable<string> {
+  resumeSession(
+    sessionId: string,
+    message: string,
+    cwd?: string,
+  ): AsyncIterable<StreamChunk> {
     const cmd = this.command
-    const args = ['--print', '--resume', sessionId, '--output-format', 'stream-json', '--verbose']
-    async function* s() {
-      for await (const e of spawnCliStream(cmd, args, message, cwd)) if (e.text) yield e.text
+    const args = [
+      '--print',
+      '--resume',
+      sessionId,
+      '--output-format',
+      'stream-json',
+      '--verbose',
+    ]
+    async function* s(): AsyncIterable<StreamChunk> {
+      for await (const e of spawnCliStream(cmd, args, message, cwd)) {
+        if ('sessionId' in e) continue
+        yield e
+      }
     }
     return s()
   }

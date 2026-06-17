@@ -2,6 +2,12 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { api, streamPost, type Message, type StageRun, type FeatureDetail } from '@/api'
 
+export interface ToolCall {
+  name: string
+  input?: unknown
+  status: 'running' | 'done'
+}
+
 export const useChatStore = defineStore('chat', () => {
   const featureDetail = ref<FeatureDetail | null>(null)
   const messages = ref<Message[]>([])
@@ -9,6 +15,20 @@ export const useChatStore = defineStore('chat', () => {
   const streamingText = ref('')
   const isStreaming = ref(false)
   const artifactContent = ref('')
+
+  // ── Thinking / Tool 进度（流式期间实时更新） ────────────────────
+  const thinkingText = ref('')       // 最近一段思考文本（最多 200 字覆盖式）
+  const thinkingTokens = ref(0)      // 累计 token 数（来自 thinking_tokens 事件）
+  const activeTool = ref<{ name: string; input?: unknown } | null>(null)
+  const toolLog = ref<ToolCall[]>([])// 已完成的工具调用历史
+
+  function resetStreamingProgress() {
+    streamingText.value = ''
+    thinkingText.value = ''
+    thinkingTokens.value = 0
+    activeTool.value = null
+    toolLog.value = []
+  }
 
   async function loadFeature(featureId: string) {
     featureDetail.value = await api.features.get(featureId)
@@ -32,7 +52,7 @@ export const useChatStore = defineStore('chat', () => {
   // 启动新阶段（第一条消息）
   async function startStage(featureId: string, stage: string, firstMessage: string) {
     isStreaming.value = true
-    streamingText.value = ''
+    resetStreamingProgress()
 
     // 乐观添加用户消息
     messages.value.push({
@@ -48,7 +68,21 @@ export const useChatStore = defineStore('chat', () => {
       const { stageRunId } = await streamPost(
         url,
         { stage, firstMessage, runtimeId: 'claude' },
-        (chunk) => { streamingText.value += chunk },
+        {
+          onText: (t) => { streamingText.value += t },
+          onThinking: (info) => {
+            if (typeof info.tokensTotal === 'number') thinkingTokens.value = info.tokensTotal
+            if (info.text) thinkingText.value = info.text.slice(-200)
+          },
+          onTool: (info) => {
+            if (info.phase === 'start') {
+              activeTool.value = { name: info.name, input: info.input }
+            } else {
+              activeTool.value = null
+              toolLog.value.push({ name: info.name, status: 'done' })
+            }
+          },
+        },
       )
 
       // 流结束后，刷新真实数据
@@ -65,7 +99,7 @@ export const useChatStore = defineStore('chat', () => {
   async function sendMessage(featureId: string, message: string) {
     if (!activeStageRun.value) return
     isStreaming.value = true
-    streamingText.value = ''
+    resetStreamingProgress()
 
     messages.value.push({
       id: 'tmp-user-' + Date.now(),
@@ -77,7 +111,21 @@ export const useChatStore = defineStore('chat', () => {
 
     try {
       const url = api.stages.messageUrl(activeStageRun.value.id)
-      await streamPost(url, { message }, (chunk) => { streamingText.value += chunk })
+      await streamPost(url, { message }, {
+        onText: (t) => { streamingText.value += t },
+        onThinking: (info) => {
+          if (typeof info.tokensTotal === 'number') thinkingTokens.value = info.tokensTotal
+          if (info.text) thinkingText.value = info.text.slice(-200)
+        },
+        onTool: (info) => {
+          if (info.phase === 'start') {
+            activeTool.value = { name: info.name, input: info.input }
+          } else {
+            activeTool.value = null
+            toolLog.value.push({ name: info.name, status: 'done' })
+          }
+        },
+      })
 
       // 刷新消息列表
       messages.value = await api.stages.messages(activeStageRun.value.id)
@@ -102,6 +150,10 @@ export const useChatStore = defineStore('chat', () => {
     streamingText.value = ''
     isStreaming.value = false
     artifactContent.value = ''
+    thinkingText.value = ''
+    thinkingTokens.value = 0
+    activeTool.value = null
+    toolLog.value = []
   }
 
   return {
@@ -111,6 +163,10 @@ export const useChatStore = defineStore('chat', () => {
     streamingText,
     isStreaming,
     artifactContent,
+    thinkingText,
+    thinkingTokens,
+    activeTool,
+    toolLog,
     loadFeature,
     startStage,
     sendMessage,

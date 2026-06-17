@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { stageRuns, messages, features, workspaces } from '../db/schema.js'
 import { getRuntime } from '../runtime/registry.js'
 import { buildSystemPrompt, buildUpstreamContext, getAgentConfig, type FeatureContext } from '../config/agents.js'
+import type { StreamChunk } from '../runtime/adapter.js'
 import { ArtifactService } from './artifact.js'
 import { randomUUID } from 'crypto'
 import path from 'path'
@@ -40,7 +41,7 @@ export class AgentService {
     runtimeId: string = 'claude',
     localPath?: string,
     featureCtx?: FeatureContext,
-  ): Promise<{ stageRunId: string; stream: AsyncIterable<string> }> {
+  ): Promise<{ stageRunId: string; stream: AsyncIterable<StreamChunk> }> {
     const artifacts = await this.getApprovedArtifacts(featureId)
     const upstreamCtx = buildUpstreamContext(stage, artifacts)
     const systemPrompt = buildSystemPrompt(stage, techStack, background, featureCtx) + upstreamCtx
@@ -71,12 +72,12 @@ export class AgentService {
       createdAt: now,
     })
 
-    // 包装流：结束时存储 assistant 消息
+    // 包装流：结束时存储 assistant 消息（只持久化 text，thinking/tool 透传不落库）
     const self = this
-    async function* wrappedStream(): AsyncIterable<string> {
+    async function* wrappedStream(): AsyncIterable<StreamChunk> {
       let fullText = ''
       for await (const chunk of stream) {
-        fullText += chunk
+        if (chunk.kind === 'text') fullText += chunk.text
         yield chunk
       }
       await db.insert(messages).values({
@@ -95,7 +96,7 @@ export class AgentService {
   static async sendMessage(
     stageRunId: string,
     userMessage: string,
-  ): Promise<AsyncIterable<string>> {
+  ): Promise<AsyncIterable<StreamChunk>> {
     const [run] = await db.select().from(stageRuns).where(eq(stageRuns.id, stageRunId))
     if (!run) throw new Error(`StageRun ${stageRunId} not found`)
     if (!run.cliSessionId) throw new Error(`StageRun ${stageRunId} has no CLI session`)
@@ -120,10 +121,10 @@ export class AgentService {
       createdAt: now,
     })
 
-    async function* wrappedStream(): AsyncIterable<string> {
+    async function* wrappedStream(): AsyncIterable<StreamChunk> {
       let fullText = ''
       for await (const chunk of stream) {
-        fullText += chunk
+        if (chunk.kind === 'text') fullText += chunk.text
         yield chunk
       }
       await db.insert(messages).values({

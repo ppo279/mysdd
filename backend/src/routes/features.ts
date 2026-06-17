@@ -1,9 +1,12 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
-import { features, stageRuns, workspaces } from '../db/schema.js'
-import { eq, asc } from 'drizzle-orm'
+import { features, stageRuns, workspaces, messages } from '../db/schema.js'
+import { eq, asc, inArray } from 'drizzle-orm'
 import { randomUUID } from 'crypto'
 import { z } from 'zod'
+import fs from 'fs'
+import path from 'path'
+import { ArtifactService } from '../services/artifact.js'
 import { loadAgentsConfig } from '../config/agents.js'
 
 const CreateFeatureSchema = z.object({
@@ -72,5 +75,29 @@ export async function featureRoutes(app: FastifyInstance) {
     const nextStage = agentOrder[currentIdx + 1]
     await db.update(features).set({ currentStage: nextStage }).where(eq(features.id, featureId))
     return { currentStage: nextStage, status: 'active' }
+  })
+
+  // 删除 feature：级联清理 messages / stage_runs / 磁盘产物，再删行
+  app.delete('/api/features/:featureId', async (req, reply) => {
+    const { featureId } = req.params as { featureId: string }
+    const [feature] = await db.select().from(features).where(eq(features.id, featureId))
+    if (!feature) return reply.code(404).send({ error: 'Feature not found' })
+
+    // 先拿到该 feature 下所有 stageRun id，删 messages 走 inArray
+    const runs = await db.select({ id: stageRuns.id }).from(stageRuns).where(eq(stageRuns.featureId, featureId))
+    const runIds = runs.map((r) => r.id)
+    if (runIds.length > 0) {
+      await db.delete(messages).where(inArray(messages.stageRunId, runIds))
+    }
+    await db.delete(stageRuns).where(eq(stageRuns.featureId, featureId))
+
+    // 删除磁盘上的产物目录 storage/<workspaceId>/<featureId>/
+    const dir = path.dirname(ArtifactService.getArtifactPath(feature.workspaceId, featureId, 'spec.md'))
+    if (fs.existsSync(dir)) {
+      try { fs.rmSync(dir, { recursive: true, force: true }) } catch { /* ignore */ }
+    }
+
+    await db.delete(features).where(eq(features.id, featureId))
+    return reply.code(204).send()
   })
 }

@@ -5,6 +5,7 @@ import { eq } from 'drizzle-orm'
 import { z } from 'zod'
 import { AgentService } from '../services/agent.js'
 import { randomUUID } from 'crypto'
+import type { StreamChunk } from '../runtime/adapter.js'
 
 const StartStageSchema = z.object({
   stage: z.string(),
@@ -32,6 +33,30 @@ function sseHeaders(origin: string | undefined) {
 
 function sseWrite(res: NodeJS.WritableStream, data: Record<string, unknown>) {
   res.write(`data: ${JSON.stringify(data)}\n\n`)
+}
+
+// 把 StreamChunk 映射成 SSE 帧：text / thinking / tool 三类分别落点
+function writeChunk(res: NodeJS.WritableStream, chunk: StreamChunk) {
+  if (chunk.kind === 'text') {
+    sseWrite(res, { text: chunk.text })
+  } else if (chunk.kind === 'thinking') {
+    sseWrite(res, {
+      thinking: {
+        text: chunk.text,
+        tokensDelta: chunk.tokensDelta,
+        tokensTotal: chunk.tokensTotal,
+      },
+    })
+  } else if (chunk.kind === 'tool') {
+    sseWrite(res, {
+      tool: {
+        phase: chunk.phase,
+        name: chunk.name,
+        toolUseId: chunk.toolUseId,
+        input: chunk.input,
+      },
+    })
+  }
 }
 
 export async function stageRoutes(app: FastifyInstance) {
@@ -71,7 +96,7 @@ export async function stageRoutes(app: FastifyInstance) {
       sseWrite(reply.raw, { stageRunId })
 
       for await (const chunk of stream) {
-        sseWrite(reply.raw, { text: chunk })
+        writeChunk(reply.raw, chunk)
       }
       sseWrite(reply.raw, { done: true, stageRunId })
     } catch (err: any) {
@@ -93,7 +118,7 @@ export async function stageRoutes(app: FastifyInstance) {
       const stream = await AgentService.sendMessage(stageRunId, message)
 
       for await (const chunk of stream) {
-        sseWrite(reply.raw, { text: chunk })
+        writeChunk(reply.raw, chunk)
       }
       sseWrite(reply.raw, { done: true })
     } catch (err: any) {
