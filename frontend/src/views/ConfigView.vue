@@ -5,9 +5,9 @@ import { api, type AgentsYamlRaw, type RuntimeRaw, type AgentRaw, type DetectedR
 import { defineAsyncComponent } from 'vue'
 import {
   NLayout, NLayoutHeader, NLayoutContent, NSpace, NButton, NText, NEmpty,
-  NTabs, NTabPane, NTag, NSpin, NAlert,
-  NModal, NForm, NFormItem, NInput, NSelect, NCheckbox, NRadioGroup, NRadio,
-  NList, NListItem, NThing, NDivider, useMessage,
+  NTabs, NTabPane, NTag, NSpin,
+  NModal, NCard, NForm, NFormItem, NInput, NSelect, NCheckbox, NRadioGroup, NRadio,
+  NList, NListItem, NThing, useMessage,
   NScrollbar,
 } from 'naive-ui'
 const MarkdownEditor = defineAsyncComponent(() => import('@/components/MarkdownEditor.vue'))
@@ -486,86 +486,90 @@ function selectFile(file: string) {
   </NLayout>
 
   <!-- ─── 自动检测弹窗 ─── -->
-  <NModal v-model:show="detectModal" preset="card" title="本机运行时检测" style="width: 600px;">
-    <div v-if="detecting" style="display:flex;align-items:center;gap:12px;padding:24px 0;">
-      <NSpin size="small" />
-      <NText depth="3">正在扫描本机已安装的 AI CLI 工具...</NText>
-    </div>
-    <template v-else>
-      <NEmpty v-if="detectedList.length === 0" description="未检测到可用工具" />
-      <NList v-else bordered style="max-height:360px;overflow-y:auto;">
-        <NListItem v-for="rt in detectedList" :key="rt.id" :style="{ opacity: rt.available ? 1 : 0.5 }">
-          <NThing>
-            <template #avatar>
-              <NTag :type="rt.available ? 'success' : 'error'" size="small" round>
-                {{ rt.available ? '✓' : '✗' }}
-              </NTag>
-            </template>
-            <template #header>
-              <NSpace align="center" :size="6">
-                <NText strong>{{ rt.id }}</NText>
-                <NTag size="small">{{ rt.type }}</NTag>
-                <NTag v-if="rt.source === 'daemon'" size="small" type="warning">
-                  daemon :{{ rt.daemonPort }}
-                  <span :style="{ display:'inline-block',width:'7px',height:'7px',borderRadius:'50%',
-                    background:rt.daemonRunning?'#18a058':'#aaa',marginLeft:'4px' }" />
+  <NModal v-model:show="detectModal">
+    <NCard title="本机运行时检测" closable style="width:600px;background:#fff;"
+      @close="detectModal = false">
+      <div v-if="detecting" style="display:flex;align-items:center;gap:12px;padding:24px 0;">
+        <NSpin size="small" />
+        <NText depth="3">正在扫描本机已安装的 AI CLI 工具...</NText>
+      </div>
+      <template v-else>
+        <NEmpty v-if="detectedList.length === 0" description="未检测到可用工具" />
+        <NList v-else bordered style="max-height:360px;overflow-y:auto;">
+          <NListItem v-for="rt in detectedList" :key="rt.id" :style="{ opacity: rt.available ? 1 : 0.5 }">
+            <NThing>
+              <template #avatar>
+                <NTag :type="rt.available ? 'success' : 'error'" size="small" round>
+                  {{ rt.available ? '✓' : '✗' }}
                 </NTag>
-              </NSpace>
-            </template>
-            <template #description>
-              <NSpace :size="8">
-                <code style="font-size:12px;">{{ rt.command }}</code>
-                <NText v-if="rt.version" type="success" style="font-size:12px;">{{ rt.version }}</NText>
-                <NText v-else-if="!rt.available" type="error" style="font-size:12px;">未在 PATH 中找到</NText>
-              </NSpace>
-            </template>
-            <template #header-extra>
-              <NButton v-if="rt.available" size="small"
-                :type="config.runtimes.some(r => r.id === rt.id) ? 'default' : 'primary'"
-                @click="addDetected(rt)">
-                {{ config.runtimes.some(r => r.id === rt.id) ? '已添加（更新）' : '+ 添加' }}
-              </NButton>
-            </template>
-          </NThing>
-        </NListItem>
-      </NList>
-    </template>
-    <template #footer>
-      <NSpace justify="end">
-        <NButton @click="detectModal = false">关闭</NButton>
-        <NButton v-if="detectedList.some(r => r.available)" type="primary" @click="addAllDetected">
-          全部添加（{{ detectedList.filter(r => r.available).length }} 个）
-        </NButton>
-      </NSpace>
-    </template>
+              </template>
+              <template #header>
+                <NSpace align="center" :size="6">
+                  <NText strong>{{ rt.id }}</NText>
+                  <NTag size="small">{{ rt.type }}</NTag>
+                  <NTag v-if="rt.source === 'daemon'" size="small" type="warning">
+                    daemon :{{ rt.daemonPort }}
+                    <span :style="{ display:'inline-block',width:'7px',height:'7px',borderRadius:'50%',
+                      background:rt.daemonRunning?'#18a058':'#aaa',marginLeft:'4px' }" />
+                  </NTag>
+                </NSpace>
+              </template>
+              <template #description>
+                <NSpace :size="8">
+                  <code style="font-size:12px;">{{ rt.command }}</code>
+                  <NText v-if="rt.version" type="success" style="font-size:12px;">{{ rt.version }}</NText>
+                  <NText v-else-if="!rt.available" type="error" style="font-size:12px;">未在 PATH 中找到</NText>
+                </NSpace>
+              </template>
+              <template #header-extra>
+                <NButton v-if="rt.available" size="small"
+                  :type="config.runtimes.some(r => r.id === rt.id) ? 'default' : 'primary'"
+                  @click="addDetected(rt)">
+                  {{ config.runtimes.some(r => r.id === rt.id) ? '已添加（更新）' : '+ 添加' }}
+                </NButton>
+              </template>
+            </NThing>
+          </NListItem>
+        </NList>
+      </template>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="detectModal = false">关闭</NButton>
+          <NButton v-if="detectedList.some(r => r.available)" type="primary" @click="addAllDetected">
+            全部添加（{{ detectedList.filter(r => r.available).length }} 个）
+          </NButton>
+        </NSpace>
+      </template>
+    </NCard>
   </NModal>
 
   <!-- ─── 运行时编辑弹窗 ─── -->
-  <NModal v-model:show="runtimeModal" preset="card"
-    :title="editingRuntime ? '编辑运行时' : '新增运行时'" style="width: 440px;">
-    <NForm label-placement="top" :show-feedback="false">
-      <NFormItem label="ID *">
-        <NInput v-model:value="runtimeForm.id" placeholder="如 claude、codex" :disabled="!!editingRuntime" />
-      </NFormItem>
-      <NFormItem label="类型">
-        <NInput v-model:value="runtimeForm.type" placeholder="如 claude-cli、openai-cli" />
-      </NFormItem>
-      <NFormItem label="CLI 命令">
-        <NInput v-model:value="runtimeForm.command" placeholder="如 claude" />
-      </NFormItem>
-    </NForm>
-    <template #footer>
-      <NSpace justify="end">
-        <NButton @click="runtimeModal = false">取消</NButton>
-        <NButton type="primary" :disabled="!runtimeForm.id.trim()" @click="saveRuntime">保存</NButton>
-      </NSpace>
-    </template>
+  <NModal v-model:show="runtimeModal">
+    <NCard :title="editingRuntime ? '编辑运行时' : '新增运行时'" closable
+      style="width:440px;background:#fff;" @close="runtimeModal = false">
+      <NForm label-placement="top" :show-feedback="false">
+        <NFormItem label="ID *">
+          <NInput v-model:value="runtimeForm.id" placeholder="如 claude、codex" :disabled="!!editingRuntime" />
+        </NFormItem>
+        <NFormItem label="类型">
+          <NInput v-model:value="runtimeForm.type" placeholder="如 claude-cli、openai-cli" />
+        </NFormItem>
+        <NFormItem label="CLI 命令">
+          <NInput v-model:value="runtimeForm.command" placeholder="如 claude" />
+        </NFormItem>
+      </NForm>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="runtimeModal = false">取消</NButton>
+          <NButton type="primary" :disabled="!runtimeForm.id.trim()" @click="saveRuntime">保存</NButton>
+        </NSpace>
+      </template>
+    </NCard>
   </NModal>
 
   <!-- ─── Agent 编辑弹窗（左右分栏）─── -->
-  <NModal v-model:show="agentModal" :show-icon="false"
-    style="width:90vw;max-width:1100px;height:82vh;padding:0;overflow:hidden;">
-    <div style="display:flex;height:82vh;overflow:hidden;">
+  <NModal v-model:show="agentModal">
+    <div style="display:flex;width:90vw;max-width:1100px;height:82vh;overflow:hidden;border-radius:8px;background:#fff;">
       <!-- 左：配置区 -->
       <div style="width:340px;flex-shrink:0;display:flex;flex-direction:column;border-right:1px solid #efeff5;overflow-y:auto;padding:20px;gap:12px;">
         <NText strong style="font-size:15px;">{{ editingAgent ? '编辑 Agent' : '新增 Agent' }}</NText>
@@ -676,21 +680,24 @@ function selectFile(file: string) {
   </NModal>
 
   <!-- ─── 文件浏览器弹窗 ─── -->
-  <NModal v-model:show="filePickerOpen" preset="card" title="选择提示词文件" style="width: 580px;">
-    <NInput v-model:value="filePickerFilter" placeholder="输入关键字过滤..." style="margin-bottom:10px;" />
-    <div style="border:1px solid #efeff5;border-radius:6px;max-height:320px;overflow-y:auto;">
-      <NEmpty v-if="filteredFiles.length === 0" description="无匹配文件" style="padding:24px 0;" />
-      <div v-for="f in filteredFiles" :key="f"
-        style="padding:8px 12px;cursor:pointer;font-size:12px;font-family:monospace;color:#374151;border-bottom:1px solid #f5f5f5;"
-        @click="selectFile(f)"
-        @mouseover="($event.target as HTMLElement).style.background='#f0f0ff'"
-        @mouseleave="($event.target as HTMLElement).style.background='transparent'"
-      >{{ f }}</div>
-    </div>
-    <template #footer>
-      <NSpace justify="end">
-        <NButton @click="filePickerOpen = false">取消</NButton>
-      </NSpace>
-    </template>
+  <NModal v-model:show="filePickerOpen">
+    <NCard title="选择提示词文件" closable style="width:580px;background:#fff;"
+      @close="filePickerOpen = false">
+      <NInput v-model:value="filePickerFilter" placeholder="输入关键字过滤..." style="margin-bottom:10px;" />
+      <div style="border:1px solid #efeff5;border-radius:6px;max-height:320px;overflow-y:auto;">
+        <NEmpty v-if="filteredFiles.length === 0" description="无匹配文件" style="padding:24px 0;" />
+        <div v-for="f in filteredFiles" :key="f"
+          style="padding:8px 12px;cursor:pointer;font-size:12px;font-family:monospace;color:#374151;border-bottom:1px solid #f5f5f5;"
+          @click="selectFile(f)"
+          @mouseover="($event.target as HTMLElement).style.background='#f0f0ff'"
+          @mouseleave="($event.target as HTMLElement).style.background='transparent'"
+        >{{ f }}</div>
+      </div>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="filePickerOpen = false">取消</NButton>
+        </NSpace>
+      </template>
+    </NCard>
   </NModal>
 </template>

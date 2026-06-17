@@ -4,7 +4,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { api, type WorkspaceDetail, type Feature } from '@/api'
 import {
   NLayout, NLayoutHeader, NLayoutContent, NSpace, NButton, NText, NEmpty, NSpin,
-  NModal, NForm, NFormItem, NInput, NTag, NBreadcrumb, NBreadcrumbItem,
+  NModal, NCard, NForm, NFormItem, NInput, NTag, NBreadcrumb, NBreadcrumbItem,
   NList, NListItem, NThing, useMessage,
 } from 'naive-ui'
 
@@ -110,24 +110,27 @@ async function handleCreateFeature() {
     </NLayoutContent>
   </NLayout>
 
-  <NModal v-model:show="showCreate" preset="card" title="新建 Feature" style="width: 460px;">
-    <NForm label-placement="top" :show-feedback="false">
-      <NFormItem label="Feature 名称 *">
-        <NInput v-model:value="newFeature.name" placeholder="如：用户注册功能" />
-      </NFormItem>
-      <NFormItem label="描述">
-        <NInput v-model:value="newFeature.description" type="textarea" :rows="3"
-          placeholder="简要描述这个 Feature 的目标..." />
-      </NFormItem>
-    </NForm>
-    <template #footer>
-      <NSpace justify="end">
-        <NButton @click="showCreate = false">取消</NButton>
-        <NButton type="primary" :loading="creating" :disabled="!newFeature.name.trim()"
-          @click="handleCreateFeature">
-          创建并开始
-        </NButton>
-      </NSpace>
-    </template>
+  <NModal v-model:show="showCreate">
+    <NCard title="新建 Feature" closable style="width:460px;background:#fff;"
+      @close="showCreate = false">
+      <NForm label-placement="top" :show-feedback="false">
+        <NFormItem label="Feature 名称 *">
+          <NInput v-model:value="newFeature.name" placeholder="如：用户注册功能" />
+        </NFormItem>
+        <NFormItem label="描述">
+          <NInput v-model:value="newFeature.description" type="textarea" :rows="3"
+            placeholder="简要描述这个 Feature 的目标..." />
+        </NFormItem>
+      </NForm>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="showCreate = false">取消</NButton>
+          <NButton type="primary" :loading="creating" :disabled="!newFeature.name.trim()"
+            @click="handleCreateFeature">
+            创建并开始
+          </NButton>
+        </NSpace>
+      </template>
+    </NCard>
   </NModal>
 </template>

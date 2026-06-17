@@ -6,7 +6,7 @@ import type { WorkspaceInput } from '@/api'
 import {
   NLayout, NLayoutHeader, NLayoutContent, NSpace, NButton, NGrid, NGridItem,
   NCard, NTag, NText, NEmpty, NSpin, NModal, NForm, NFormItem, NInput,
-  NSelect, useMessage,
+  NSelect, NScrollbar, useMessage,
 } from 'naive-ui'
 
 const router = useRouter()
@@ -91,32 +91,35 @@ async function handleCreate() {
     </NLayoutContent>
   </NLayout>
 
-  <NModal v-model:show="showCreate" preset="card" title="新建 Workspace" style="width: 500px;">
-    <NForm label-placement="top" :show-feedback="false">
-      <NFormItem label="名称 *">
-        <NInput v-model:value="form.name" placeholder="如：电商平台" />
-      </NFormItem>
-      <NFormItem label="描述">
-        <NInput v-model:value="form.description" placeholder="简要说明项目用途" />
-      </NFormItem>
-      <NFormItem label="仓库地址">
-        <NInput v-model:value="form.repoUrl" placeholder="https://github.com/..." />
-      </NFormItem>
-      <NFormItem label="技术选型">
-        <NSelect v-model:value="form.techStack" :options="techOptions" />
-      </NFormItem>
-      <NFormItem label="背景上下文">
-        <NInput v-model:value="form.background" type="textarea" :rows="4"
-          placeholder="项目背景、约束、注意事项..." />
-      </NFormItem>
-    </NForm>
-    <template #footer>
-      <NSpace justify="end">
-        <NButton @click="showCreate = false">取消</NButton>
-        <NButton type="primary" :loading="creating" :disabled="!form.name.trim()" @click="handleCreate">
-          创建
-        </NButton>
-      </NSpace>
-    </template>
+  <NModal v-model:show="showCreate">
+    <NCard title="新建 Workspace" closable style="width:500px;background:#fff;"
+      @close="showCreate = false">
+      <NForm label-placement="top" :show-feedback="false">
+        <NFormItem label="名称 *">
+          <NInput v-model:value="form.name" placeholder="如：电商平台" />
+        </NFormItem>
+        <NFormItem label="描述">
+          <NInput v-model:value="form.description" placeholder="简要说明项目用途" />
+        </NFormItem>
+        <NFormItem label="仓库地址">
+          <NInput v-model:value="form.repoUrl" placeholder="https://github.com/..." />
+        </NFormItem>
+        <NFormItem label="技术选型">
+          <NSelect v-model:value="form.techStack" :options="techOptions" />
+        </NFormItem>
+        <NFormItem label="背景上下文">
+          <NInput v-model:value="form.background" type="textarea" :rows="4"
+            placeholder="项目背景、约束、注意事项..." />
+        </NFormItem>
+      </NForm>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="showCreate = false">取消</NButton>
+          <NButton type="primary" :loading="creating" :disabled="!form.name.trim()" @click="handleCreate">
+            创建
+          </NButton>
+        </NSpace>
+      </template>
+    </NCard>
   </NModal>
 </template>
