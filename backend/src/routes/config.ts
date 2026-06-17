@@ -64,6 +64,8 @@ export async function configRoutes(app: FastifyInstance) {
     // 清除模块缓存，让下次 loadAgentsConfig 重新读文件
     const { clearCache } = await import('../config/agents.js')
     clearCache()
+    const { clearRuntimeCache } = await import('../runtime/registry.js')
+    clearRuntimeCache()
     return { ok: true }
   })
 

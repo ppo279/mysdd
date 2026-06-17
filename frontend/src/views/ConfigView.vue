@@ -432,7 +432,10 @@ function toggleUpstream(agentId: string) {
           <NInput v-model:value="runtimeForm.id" placeholder="如 claude、codex" :disabled="!!editingRuntime" />
         </NFormItem>
         <NFormItem label="类型">
-          <NInput v-model:value="runtimeForm.type" placeholder="如 claude-cli、openai-cli" />
+          <NSelect v-model:value="runtimeForm.type" :options="[
+            { label: 'claude-cli（Claude Code）', value: 'claude-cli' },
+            { label: 'codefree-cli（CodeFree）', value: 'codefree-cli' },
+          ]" />
         </NFormItem>
         <NFormItem label="CLI 命令">
           <NInput v-model:value="runtimeForm.command" placeholder="如 claude" />
