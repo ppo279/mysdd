@@ -109,15 +109,16 @@ export class ClaudeAdapter implements RuntimeAdapter {
   async createSession(systemPrompt: string, firstMessage: string): Promise<SendResult> {
     const args = [
       '-p', firstMessage,
-      '--system', systemPrompt,
+      '--system-prompt', systemPrompt,
       '--output-format', 'stream-json',
+      '--verbose',
     ]
     return wrapSessionStream(spawnCliStream(this.command, args), this.command)
   }
 
   resumeSession(sessionId: string, message: string): AsyncIterable<string> {
     const cmd = this.command
-    const args = ['--resume', sessionId, '-p', message, '--output-format', 'stream-json']
+    const args = ['--resume', sessionId, '-p', message, '--output-format', 'stream-json', '--verbose']
     async function* s() {
       for await (const e of spawnCliStream(cmd, args)) if (e.text) yield e.text
     }

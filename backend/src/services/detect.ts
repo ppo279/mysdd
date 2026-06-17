@@ -21,8 +21,9 @@ const CANDIDATES: Array<{
   source: 'cli' | 'daemon'
   daemonPort?: number
 }> = [
-  { id: 'claude', type: 'claude-cli',   command: 'claude',  versionFlag: '--version', source: 'cli' },
-  { id: 'codex',  type: 'openai-cli',   command: 'codex',   versionFlag: '--version', source: 'cli' },
+  { id: 'claude',    type: 'claude-cli',   command: 'claude',    versionFlag: '--version', source: 'cli' },
+  { id: 'codefree', type: 'codefree-cli', command: 'codefree', versionFlag: '--version', source: 'cli' },
+  { id: 'codex',    type: 'openai-cli',   command: 'codex',    versionFlag: '--version', source: 'cli' },
   { id: 'gemini', type: 'gemini-cli',   command: 'gemini',  versionFlag: '--version', source: 'cli' },
   { id: 'aider',  type: 'aider-cli',    command: 'aider',   versionFlag: '--version', source: 'cli' },
   { id: 'ollama', type: 'ollama',       command: 'ollama',  versionFlag: '--version', source: 'daemon', daemonPort: 11434 },

@@ -84,10 +84,11 @@ function addBaseLayer() {
   globalSelectedIdx.value = config.value.global.base_layers.length - 1
 }
 
-function removeBaseLayer(idx: number) {
+async function removeBaseLayer(idx: number) {
   config.value.global.base_layers.splice(idx, 1)
   if (globalSelectedIdx.value === idx) globalSelectedIdx.value = null
   else if (globalSelectedIdx.value !== null && globalSelectedIdx.value > idx) globalSelectedIdx.value--
+  await saveConfig()
 }
 
 // ─── 计算属性 ──────────────────────────────────────────
@@ -167,7 +168,7 @@ function openEditAgent(agent: AgentRaw) {
   agentModal.value = true
 }
 
-function saveAgent() {
+async function saveAgent() {
   if (!agentForm.id.trim() || !agentForm.name.trim()) return
 
   const data: AgentRaw = {
@@ -184,6 +185,8 @@ function saveAgent() {
   } else {
     config.value.agents.push(data)
   }
+
+  await saveConfig()
   agentModal.value = false
 }
 
@@ -493,6 +496,7 @@ function toggleUpstream(agentId: string) {
           <NSpace justify="end">
             <NButton @click="agentModal = false">取消</NButton>
             <NButton type="primary"
+              :loading="saving"
               :disabled="!agentForm.id.trim() || !agentForm.name.trim()"
               @click="saveAgent">保存 Agent</NButton>
           </NSpace>
