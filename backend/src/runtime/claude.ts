@@ -11,28 +11,16 @@ interface StreamEvent {
   result?: string
 }
 
-// Windows 下 .cmd 文件必须通过 cmd.exe 执行。
-// 用 cmd.exe /c + 数组 args 形式，Node.js 负责 CreateProcess 级别的转义，
-// 比 shell:true（字符串拼接）更安全。
-function buildSpawnTarget(command: string, args: string[]): { file: string; args: string[] } {
-  if (process.platform !== 'win32') return { file: command, args }
-  // 已有路径或扩展名（如 .exe 全路径）直接执行
-  if (command.includes('/') || command.includes('\\') || /\.\w+$/.test(command)) {
-    return { file: command, args }
-  }
-  return { file: 'cmd.exe', args: ['/c', command, ...args] }
-}
-
 // 共享 spawn 工具：支持可选的 stdin 内容（用于无 --system 标志的 CLI）
+// Windows 下必须用 shell:true 才能正确执行 .cmd 包装脚本并保持参数完整性
 export async function* spawnCliStream(
   command: string,
   args: string[],
   stdinContent?: string,
 ): AsyncIterable<{ sessionId?: string; text?: string }> {
-  const target = buildSpawnTarget(command, args)
-  const proc = spawn(target.file, target.args, {
+  const proc = spawn(command, args, {
     stdio: [stdinContent !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
-    shell: false,
+    shell: process.platform === 'win32',
   })
 
   if (stdinContent !== undefined && proc.stdin) {
@@ -45,10 +33,9 @@ export async function* spawnCliStream(
   })
   if (spawnError) throw new Error(`无法启动 "${command}"：${spawnError.message}。请确认已安装并在 PATH 中，或在运行时配置中填写完整路径。`)
 
-  // 必须持续读 stderr，否则管道缓冲区写满会导致子进程阻塞，stdout 停止输出
-  proc.stderr?.on('data', (chunk: Buffer) => {
-    process.stderr.write(`[${command} stderr] ${chunk.toString()}`)
-  })
+  // 持续读 stderr 防止管道缓冲区写满导致子进程阻塞
+  const stderrLines: string[] = []
+  proc.stderr?.on('data', (chunk: Buffer) => stderrLines.push(chunk.toString()))
 
   let buffer = ''
   const decoder = new TextDecoder()
@@ -61,8 +48,6 @@ export async function* spawnCliStream(
     for (const line of lines) {
       const trimmed = line.trim()
       if (!trimmed) continue
-      // 调试：打印原始行，帮助确认事件格式
-      process.stderr.write(`[${command} stdout] ${trimmed}\n`)
       try {
         const event: StreamEvent = JSON.parse(trimmed)
 
@@ -76,13 +61,21 @@ export async function* spawnCliStream(
           yield { text: event.result }
         }
       } catch {
-        // 非 JSON 行忽略
+        // 非 JSON 行，记录供出错时诊断
+        stderrLines.push(`[stdout non-json] ${trimmed}`)
       }
     }
   }
 
   await new Promise<void>((resolve, reject) => {
-    proc.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`"${command}" exited with code ${code}`))))
+    proc.on('close', (code) => {
+      if (code === 0) {
+        resolve()
+      } else {
+        if (stderrLines.length) process.stderr.write(`[${command} output]\n${stderrLines.join('\n')}\n`)
+        reject(new Error(`"${command}" exited with code ${code}`))
+      }
+    })
   })
 }
 
