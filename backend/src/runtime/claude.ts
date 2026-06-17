@@ -80,40 +80,64 @@ export async function* spawnCliStream(
 }
 
 // 共享的 sessionId 提取 + 流包装逻辑
+// 用后台 IIFE 持续消费 source，将文本放入 buffer，避免因生成器暂停导致 session_id 事件永远读不到
 export async function wrapSessionStream(
   source: AsyncIterable<{ sessionId?: string; text?: string }>,
   commandName: string,
 ): Promise<SendResult> {
-  let resolveSessionId!: (id: string) => void
-  let rejectSessionId!: (e: Error) => void
+  let sessionResolve!: (id: string) => void
+  let sessionReject!: (e: Error) => void
   const sessionIdPromise = new Promise<string>((res, rej) => {
-    resolveSessionId = res
-    rejectSessionId = rej
+    sessionResolve = res
+    sessionReject = rej
   })
 
-  async function* makeStream(): AsyncIterable<string> {
-    let gotSession = false
-    for await (const event of source) {
-      if (event.sessionId && !gotSession) {
-        gotSession = true
-        resolveSessionId(event.sessionId)
+  const buffer: string[] = []
+  let done = false
+  let streamError: Error | undefined
+  let notify: (() => void) | undefined
+
+  // 后台持续消费 source，不依赖外部是否在读取流
+  ;(async () => {
+    try {
+      let sessionFound = false
+      for await (const event of source) {
+        if (event.sessionId && !sessionFound) {
+          sessionFound = true
+          sessionResolve(event.sessionId)
+        }
+        if (event.text) {
+          buffer.push(event.text)
+          notify?.()
+          notify = undefined
+        }
       }
-      if (event.text) yield event.text
+      if (!sessionFound) sessionReject(new Error(`${commandName} CLI did not return a session_id`))
+    } catch (e) {
+      streamError = e as Error
+      sessionReject(e as Error)
+    } finally {
+      done = true
+      notify?.()
+      notify = undefined
     }
-    if (!gotSession) rejectSessionId(new Error(`${commandName} CLI did not return a session_id`))
-  }
+  })()
 
-  const stream = makeStream()
-  const firstChunk = await stream[Symbol.asyncIterator]().next()
-
-  async function* fullStream(): AsyncIterable<string> {
-    if (!firstChunk.done && firstChunk.value) yield firstChunk.value
-    // @ts-ignore — 继续消费同一迭代器
-    for await (const text of stream) yield text
-  }
-
+  // 等待 session_id（后台 IIFE 正在驱动 source，不会死锁）
   const sessionId = await sessionIdPromise
-  return { sessionId, stream: fullStream() }
+
+  // 返回从 buffer 读取的流
+  async function* stream(): AsyncIterable<string> {
+    let idx = 0
+    while (true) {
+      while (idx < buffer.length) yield buffer[idx++]
+      if (done) break
+      await new Promise<void>((r) => { notify = r })
+    }
+    if (streamError) throw streamError
+  }
+
+  return { sessionId, stream: stream() }
 }
 
 export class ClaudeAdapter implements RuntimeAdapter {
