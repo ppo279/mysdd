@@ -23,6 +23,8 @@ export const api = {
       request<Workspace>(`/api/workspaces/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     delete: (id: string) =>
       request<void>(`/api/workspaces/${id}`, { method: 'DELETE' }),
+    init: (id: string, onChunk: (text: string) => void) =>
+      streamInit(id, onChunk),
   },
 
   features: {
@@ -101,6 +103,36 @@ export async function streamPost(
   return { stageRunId }
 }
 
+// SSE 初始化 workspace（git clone）
+export async function streamInit(
+  workspaceId: string,
+  onChunk: (text: string) => void,
+): Promise<{ error: boolean }> {
+  const res = await fetch(`${BASE}/api/workspaces/${workspaceId}/init`, { method: 'POST' })
+  if (!res.ok || !res.body) throw new Error('Init request failed')
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let hasError = false
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue
+      let data: any
+      try { data = JSON.parse(line.slice(6)) } catch { continue }
+      if (data.text) onChunk(data.text)
+      if (data.error) hasError = true
+    }
+  }
+  return { error: hasError }
+}
+
 // ─── Types ───────────────────────────────────────────────────
 export interface Workspace {
   id: string
@@ -117,7 +149,7 @@ export interface WorkspaceInput {
   name: string
   description: string
   repoUrl: string
-  techStack: string
+  techStack?: string
   background: string
 }
 

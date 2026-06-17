@@ -12,6 +12,13 @@ interface StreamEvent {
   result?: string
 }
 
+// dev 模式下打印 CLI 每行输出；生产下只打印 exit code
+const DEBUG = process.env.NODE_ENV !== 'production'
+
+function cliLog(...args: string[]) {
+  process.stderr.write(args.join(' ') + '\n')
+}
+
 // 共享 spawn 工具：支持可选的 stdin 内容（用于无 --system 标志的 CLI）
 // Windows 下必须用 shell:true 才能正确执行 .cmd 包装脚本并保持参数完整性
 export async function* spawnCliStream(
@@ -23,6 +30,13 @@ export async function* spawnCliStream(
   // Default to home dir so the CLI doesn't pick up any project CLAUDE.md.
   // Callers pass the workspace localPath when they want the agent to work inside a project.
   const resolvedCwd = cwd ?? os.homedir()
+
+  if (DEBUG) {
+    cliLog(`[CLI] spawn: ${command} ${args.join(' ')}`)
+    cliLog(`[CLI] cwd:   ${resolvedCwd}`)
+    if (stdinContent) cliLog(`[CLI] stdin: ${stdinContent.slice(0, 120).replace(/\n/g, '↵')}`)
+  }
+
   const proc = spawn(command, args, {
     stdio: [stdinContent !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
     shell: process.platform === 'win32',
@@ -39,13 +53,20 @@ export async function* spawnCliStream(
   })
   if (spawnError) throw new Error(`无法启动 "${command}"：${spawnError.message}。请确认已安装并在 PATH 中，或在运行时配置中填写完整路径。`)
 
+  if (DEBUG) cliLog(`[CLI] process spawned (pid ${proc.pid})`)
+
   // 持续读 stderr 防止管道缓冲区写满导致子进程阻塞
   const stderrLines: string[] = []
-  proc.stderr?.on('data', (chunk: Buffer) => stderrLines.push(chunk.toString()))
+  proc.stderr?.on('data', (chunk: Buffer) => {
+    const txt = chunk.toString()
+    stderrLines.push(txt)
+    if (DEBUG) process.stderr.write(`[CLI stderr] ${txt}`)
+  })
 
   let buffer = ''
   const decoder = new TextDecoder()
   let hasStreamedText = false
+  let lineCount = 0
 
   for await (const chunk of proc.stdout!) {
     buffer += decoder.decode(chunk as Buffer, { stream: true })
@@ -55,6 +76,13 @@ export async function* spawnCliStream(
     for (const line of lines) {
       const trimmed = line.trim()
       if (!trimmed) continue
+      lineCount++
+
+      if (DEBUG) {
+        const preview = trimmed.length > 160 ? trimmed.slice(0, 160) + '…' : trimmed
+        cliLog(`[CLI stdout #${lineCount}] ${preview}`)
+      }
+
       try {
         const event: StreamEvent = JSON.parse(trimmed)
 
@@ -62,27 +90,31 @@ export async function* spawnCliStream(
 
         if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
           hasStreamedText = true
+          if (DEBUG) cliLog(`[CLI delta] "${event.delta.text.slice(0, 60)}"`)
           yield { text: event.delta.text }
         }
 
         // Only fall back to result text when no streaming deltas were received
         // (--verbose omitted or CLI version that batches output)
         if (event.type === 'result' && event.result && !hasStreamedText) {
+          if (DEBUG) cliLog(`[CLI result-fallback] ${event.result.slice(0, 80)}`)
           yield { text: event.result }
         }
       } catch {
         // 非 JSON 行，记录供出错时诊断
         stderrLines.push(`[stdout non-json] ${trimmed}`)
+        if (DEBUG) cliLog(`[CLI non-json] ${trimmed}`)
       }
     }
   }
 
   await new Promise<void>((resolve, reject) => {
     proc.on('close', (code) => {
+      cliLog(`[CLI exit] code=${code}, stdout lines=${lineCount}${stderrLines.length ? `, stderr lines=${stderrLines.length}` : ''}`)
       if (code === 0) {
         resolve()
       } else {
-        if (stderrLines.length) process.stderr.write(`[${command} output]\n${stderrLines.join('\n')}\n`)
+        if (stderrLines.length) process.stderr.write(`[${command} stderr]\n${stderrLines.join('')}\n`)
         reject(new Error(`"${command}" exited with code ${code}`))
       }
     })
@@ -114,9 +146,11 @@ export async function wrapSessionStream(
       for await (const event of source) {
         if (event.sessionId && !sessionFound) {
           sessionFound = true
+          if (DEBUG) cliLog(`[wrap] session_id resolved: ${event.sessionId}`)
           sessionResolve(event.sessionId)
         }
         if (event.text) {
+          if (DEBUG) cliLog(`[wrap] buffered text len=${event.text.length}`)
           buffer.push(event.text)
           notify?.()
           notify = undefined
@@ -128,6 +162,7 @@ export async function wrapSessionStream(
       sessionReject(e as Error)
     } finally {
       done = true
+      if (DEBUG) cliLog(`[wrap] source done, buffer size=${buffer.length}`)
       notify?.()
       notify = undefined
     }

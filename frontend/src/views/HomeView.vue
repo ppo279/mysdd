@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useWorkspaceStore } from '@/stores/workspace'
 import type { Workspace, WorkspaceInput } from '@/api'
+import { api } from '@/api'
 import {
   NLayout, NLayoutHeader, NLayoutContent, NSpace, NButton, NGrid, NGridItem,
   NCard, NTag, NText, NEmpty, NSpin, NModal, NForm, NFormItem, NInput,
@@ -16,9 +17,15 @@ const message = useMessage()
 // ── Create ────────────────────────────────────────────
 const showCreate = ref(false)
 const creating = ref(false)
-const createForm = ref<WorkspaceInput>({
-  name: '', description: '', repoUrl: '', techStack: 'ts', background: '',
-})
+const createForm = ref({ name: '', description: '', repoUrl: '', background: '' })
+
+// ── Git Init (shows after create when repoUrl is set) ──
+const showInit = ref(false)
+const initOutput = ref('')
+const initDone = ref(false)
+const initError = ref(false)
+const pendingWorkspaceId = ref<string | null>(null)
+const initOutputEl = ref<HTMLPreElement | null>(null)
 
 // ── Edit ──────────────────────────────────────────────
 const showEdit = ref(false)
@@ -47,13 +54,44 @@ async function handleCreate() {
   try {
     const ws = await store.create(createForm.value)
     showCreate.value = false
-    createForm.value = { name: '', description: '', repoUrl: '', techStack: 'ts', background: '' }
-    router.push(`/workspace/${ws.id}`)
-    message.success('Workspace 创建成功')
+    pendingWorkspaceId.value = ws.id
+    createForm.value = { name: '', description: '', repoUrl: '', background: '' }
+
+    if (ws.repoUrl?.trim()) {
+      // has git URL → show init dialog
+      showInit.value = true
+      initOutput.value = ''
+      initDone.value = false
+      initError.value = false
+      try {
+        const result = await api.workspaces.init(ws.id, (text) => {
+          initOutput.value += text
+          nextTick(() => {
+            initOutputEl.value?.scrollTo({ top: initOutputEl.value.scrollHeight })
+          })
+        })
+        initError.value = result.error
+      } catch (e: any) {
+        initOutput.value += `\n错误: ${e.message}\n`
+        initError.value = true
+      }
+      initDone.value = true
+    } else {
+      router.push(`/workspace/${ws.id}`)
+      message.success('Workspace 创建成功')
+    }
   } catch (e: any) {
     message.error(e.message)
   } finally {
     creating.value = false
+  }
+}
+
+function goToWorkspace() {
+  showInit.value = false
+  if (pendingWorkspaceId.value) {
+    router.push(`/workspace/${pendingWorkspaceId.value}`)
+    pendingWorkspaceId.value = null
   }
 }
 
@@ -124,10 +162,13 @@ async function handleDelete(id: string) {
                 <NTag :type="STACK_COLORS[ws.techStack] ?? 'default'" size="small" round>
                   {{ ws.techStack }}
                 </NTag>
-                <NText v-if="ws.localPath" depth="3" style="font-size: 11px; word-break: break-all;">
-                  {{ ws.localPath }}
+                <NText v-if="ws.repoUrl" depth="3" style="font-size: 11px;">
+                  {{ ws.repoUrl }}
                 </NText>
               </NSpace>
+              <NText v-if="ws.localPath" depth="3" style="font-size: 11px; word-break: break-all;">
+                📁 {{ ws.localPath }}
+              </NText>
               <!-- 操作按钮 -->
               <NSpace style="margin-top: 4px;">
                 <NButton size="small" @click="openEdit(ws, $event)">编辑</NButton>
@@ -145,7 +186,7 @@ async function handleDelete(id: string) {
     </NLayoutContent>
   </NLayout>
 
-  <!-- 创建 Modal -->
+  <!-- 创建 Modal（无技术选型） -->
   <NModal v-model:show="showCreate">
     <NCard title="新建 Workspace" closable style="width:500px;background:#fff;" @close="showCreate = false">
       <NForm label-placement="top" :show-feedback="false">
@@ -155,14 +196,11 @@ async function handleDelete(id: string) {
         <NFormItem label="描述">
           <NInput v-model:value="createForm.description" placeholder="简要说明项目用途" />
         </NFormItem>
-        <NFormItem label="仓库地址">
+        <NFormItem label="Git 仓库地址（可选，填写后自动克隆）">
           <NInput v-model:value="createForm.repoUrl" placeholder="https://github.com/..." />
         </NFormItem>
-        <NFormItem label="技术选型">
-          <NSelect v-model:value="createForm.techStack" :options="techOptions" />
-        </NFormItem>
         <NFormItem label="背景上下文">
-          <NInput v-model:value="createForm.background" type="textarea" :rows="4"
+          <NInput v-model:value="createForm.background" type="textarea" :rows="3"
             placeholder="项目背景、约束、注意事项..." />
         </NFormItem>
       </NForm>
@@ -171,6 +209,33 @@ async function handleDelete(id: string) {
           <NButton @click="showCreate = false">取消</NButton>
           <NButton type="primary" :loading="creating" :disabled="!createForm.name.trim()" @click="handleCreate">
             创建
+          </NButton>
+        </NSpace>
+      </template>
+    </NCard>
+  </NModal>
+
+  <!-- Git 初始化 Modal -->
+  <NModal v-model:show="showInit" :mask-closable="false" :close-on-esc="false">
+    <NCard title="初始化 Workspace" style="width:580px;background:#fff;">
+      <NText depth="3" style="font-size:13px;display:block;margin-bottom:12px;">
+        正在克隆仓库，请稍候...
+      </NText>
+      <pre
+        ref="initOutputEl"
+        style="
+          background:#1e1e1e; color:#d4d4d4; font-size:12px; line-height:1.6;
+          padding:12px 16px; border-radius:6px; max-height:300px; overflow-y:auto;
+          white-space: pre-wrap; word-break: break-all;
+        "
+      >{{ initOutput || '等待输出...' }}</pre>
+      <template #footer>
+        <NSpace justify="space-between" align="center">
+          <NText v-if="initDone && !initError" type="success">✅ 初始化完成</NText>
+          <NText v-else-if="initDone && initError" type="error">❌ 初始化出错（仍可进入 Workspace）</NText>
+          <NSpin v-else size="small" />
+          <NButton type="primary" :disabled="!initDone" @click="goToWorkspace">
+            进入 Workspace
           </NButton>
         </NSpace>
       </template>
@@ -187,7 +252,7 @@ async function handleDelete(id: string) {
         <NFormItem label="描述">
           <NInput v-model:value="editForm.description" />
         </NFormItem>
-        <NFormItem label="仓库地址">
+        <NFormItem label="Git 仓库地址">
           <NInput v-model:value="editForm.repoUrl" />
         </NFormItem>
         <NFormItem label="技术选型">
