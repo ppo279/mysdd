@@ -11,15 +11,23 @@ interface StreamEvent {
   result?: string
 }
 
+// Windows 下 nvm 全局包的入口是 .cmd 包装脚本，需要加后缀才能不依赖 shell
+function resolveCommand(command: string): string {
+  if (process.platform !== 'win32') return command
+  // 有路径分隔符或已带扩展名，直接使用
+  if (command.includes('/') || command.includes('\\') || command.includes('.')) return command
+  return command + '.cmd'
+}
+
 // 共享 spawn 工具：支持可选的 stdin 内容（用于无 --system 标志的 CLI）
 export async function* spawnCliStream(
   command: string,
   args: string[],
   stdinContent?: string,
 ): AsyncIterable<{ sessionId?: string; text?: string }> {
-  const proc = spawn(command, args, {
+  const proc = spawn(resolveCommand(command), args, {
     stdio: [stdinContent !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
-    shell: process.platform === 'win32',
+    shell: false,
   })
 
   if (stdinContent !== undefined && proc.stdin) {
@@ -107,12 +115,9 @@ export class ClaudeAdapter implements RuntimeAdapter {
   constructor(private command: string = 'claude') {}
 
   async createSession(systemPrompt: string, firstMessage: string): Promise<SendResult> {
-    const args = [
-      '-p', firstMessage,
-      '--system-prompt', systemPrompt,
-      '--output-format', 'stream-json',
-      '--verbose',
-    ]
+    const args: string[] = ['-p', firstMessage]
+    if (systemPrompt.trim()) args.push('--system-prompt', systemPrompt)
+    args.push('--output-format', 'stream-json', '--verbose')
     return wrapSessionStream(spawnCliStream(this.command, args), this.command)
   }
 
