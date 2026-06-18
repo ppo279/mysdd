@@ -12,6 +12,17 @@ const router = createRouter({
       component: () => import('@/views/WorkspaceView.vue'),
     },
     {
+      // Implements: docs/adr/0001-workflow-execution-model.md (Phase 4)
+      // 工作区下所有 workflow 列表
+      path: '/workspace/:workspaceId/workflows',
+      component: () => import('@/views/WorkflowListView.vue'),
+    },
+    {
+      // 单个 workflow 编辑器；workflowId === 'new' 表示新建
+      path: '/workspace/:workspaceId/workflow/:workflowId',
+      component: () => import('@/views/WorkflowEditorView.vue'),
+    },
+    {
       path: '/workspace/:workspaceId/feature/:featureId',
       component: () => import('@/views/FeatureView.vue'),
     },

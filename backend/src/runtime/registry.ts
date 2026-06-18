@@ -2,6 +2,7 @@ import type { RuntimeAdapter } from './adapter.js'
 import { ClaudeAdapter } from './claude.js'
 import { CodefreeAdapter } from './codefree.js'
 import { loadAgentsConfig } from '../config/agents.js'
+import { BizError, Code } from '../lib/envelope.js'
 
 function buildAdapters(): Record<string, RuntimeAdapter> {
   const cfg = loadAgentsConfig()
@@ -31,7 +32,13 @@ export function clearRuntimeCache() {
 
 export function getRuntime(id: string): RuntimeAdapter {
   const adapter = getAdapters()[id]
-  if (!adapter) throw new Error(`Runtime "${id}" not found. 请在配置页面添加对应运行时。`)
+  if (!adapter) {
+    throw new BizError(
+      Code.RUNTIME_NOT_REGISTERED,
+      `Runtime "${id}" not found. 请在配置页面添加对应运行时。`,
+      400,
+    )
+  }
   return adapter
 }
 

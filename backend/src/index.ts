@@ -8,6 +8,8 @@ import { workspaceRoutes } from './routes/workspaces.js'
 import { featureRoutes } from './routes/features.js'
 import { stageRoutes } from './routes/stages.js'
 import { configRoutes } from './routes/config.js'
+import { workflowRoutes } from './routes/workflows.js'
+import { registerErrorHandler } from './lib/envelope.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -36,6 +38,8 @@ await workspaceRoutes(app)
 await featureRoutes(app)
 await stageRoutes(app)
 await configRoutes(app)
+await workflowRoutes(app)
+registerErrorHandler(app)
 
 // 健康检查
 app.get('/health', async () => ({ ok: true }))

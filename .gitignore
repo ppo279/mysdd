@@ -123,3 +123,11 @@ ehthumbs.db
 *.bak
 *.swp
 *.orig
+
+
+agents.yaml
+CLAUDE.md
+/e2e/
+.codefree
+/docs/
+*.test.ts

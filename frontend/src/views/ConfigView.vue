@@ -6,7 +6,7 @@ import { defineAsyncComponent } from 'vue'
 import {
   NLayout, NLayoutHeader, NLayoutContent, NSpace, NButton, NText, NEmpty,
   NTabs, NTabPane, NTag, NSpin,
-  NModal, NCard, NForm, NFormItem, NInput, NSelect, NCheckbox,
+  NModal, NCard, NForm, NFormItem, NInput, NSelect, NCheckbox, NInputNumber,
   NList, NListItem, NThing, useMessage,
 } from 'naive-ui'
 const MarkdownEditor = defineAsyncComponent(() => import('@/components/MarkdownEditor.vue'))
@@ -61,8 +61,15 @@ const agentModal = ref(false)
 const editingAgent = ref<AgentRaw | null>(null)
 const agentForm = reactive<AgentRaw>({
   id: '', name: '', runtime: 'claude',
-  instruction: '', output_file: '', upstream: [],
+  instruction: '', output_file: '', outputs: [],
+  memory_sediment: false,
+  config: { runtimeId: '', env: {}, cwd: '', timeoutMs: undefined },
 })
+const agentOutputsInput = ref('default')
+const agentInputsInput = ref('default')
+// Phase 2: env 字段以 k/v 数组形式编辑，保存时合成 Record
+interface EnvEntry { key: string; value: string }
+const agentEnvList = ref<EnvEntry[]>([])
 
 // ─── 全局基础层 ────────────────────────────────────────
 const globalSelectedIdx = ref<number | null>(null)
@@ -73,8 +80,13 @@ const globalSelectedContent = computed({
       ? (config.value.global.base_layers[globalSelectedIdx.value]?.content ?? '')
       : '',
   set: (val: string) => {
-    if (globalSelectedIdx.value !== null) {
-      config.value.global.base_layers[globalSelectedIdx.value].content = val
+    const idx = globalSelectedIdx.value
+    if (idx !== null) {
+      // Implements: tasks.md#T032.2
+      // noUncheckedIndexedAccess 下 base_layers[idx] 为 BaseLayer | undefined，
+      // 加 layer 存在性守卫让类型与运行时双侧安全（与 getter 的 ?. 对齐）
+      const layer = config.value.global.base_layers[idx]
+      if (layer) layer.content = val
     }
   },
 })
@@ -93,7 +105,6 @@ async function removeBaseLayer(idx: number) {
 
 // ─── 计算属性 ──────────────────────────────────────────
 const runtimeIds = computed(() => config.value.runtimes.map((r) => r.id))
-const agentIds = computed(() => config.value.agents.map((a) => a.id))
 const runtimeOptions = computed(() => runtimeIds.value.map((id) => ({ label: id, value: id })))
 
 onMounted(async () => {
@@ -150,8 +161,13 @@ function openAddAgent() {
   editingAgent.value = null
   Object.assign(agentForm, {
     id: '', name: '', runtime: runtimeIds.value[0] ?? 'claude',
-    instruction: '', output_file: '', upstream: [],
+    instruction: '', output_file: '', outputs: [], inputs: [],
+    memory_sediment: false,
   })
+  agentOutputsInput.value = 'default'
+  agentInputsInput.value = 'default'
+  agentEnvList.value = []
+  agentForm.config = { runtimeId: '', env: {}, cwd: '', timeoutMs: undefined }
   agentModal.value = true
 }
 
@@ -163,13 +179,48 @@ function openEditAgent(agent: AgentRaw) {
     runtime: agent.runtime,
     instruction: agent.instruction ?? '',
     output_file: agent.output_file,
-    upstream: [...agent.upstream],
+    outputs: agent.outputs ? [...agent.outputs] : [],
+    memory_sediment: agent.memory_sediment ?? false,
   })
+  agentOutputsInput.value = (agent.outputs && agent.outputs.length > 0)
+    ? agent.outputs.join(', ')
+    : 'default'
+  agentInputsInput.value = (agent.inputs && agent.inputs.length > 0)
+    ? agent.inputs.join(', ')
+    : 'default'
+  // 把后端 Record<k, v> 拆回 k/v 数组，便于 NDynamicInput 编辑
+  const cfg = agent.config ?? {}
+  agentEnvList.value = Object.entries(cfg.env ?? {}).map(([key, value]) => ({ key, value }))
+  agentForm.config = {
+    runtimeId: cfg.runtimeId ?? '',
+    env: cfg.env ?? {},
+    cwd: cfg.cwd ?? '',
+    timeoutMs: cfg.timeoutMs,
+  }
   agentModal.value = true
 }
 
 async function saveAgent() {
   if (!agentForm.id.trim() || !agentForm.name.trim()) return
+
+  // 把 env 数组合成 Record，跳过空 key
+  const envRecord: Record<string, string> = {}
+  for (const e of agentEnvList.value) {
+    const k = e.key.trim()
+    if (k) envRecord[k] = e.value
+  }
+  const cfg: AgentRaw['config'] = {
+    runtimeId: agentForm.config?.runtimeId?.trim() || undefined,
+    env: Object.keys(envRecord).length > 0 ? envRecord : undefined,
+    cwd: agentForm.config?.cwd?.trim() || undefined,
+    timeoutMs: agentForm.config?.timeoutMs,
+  }
+  // 全部为空时不写入 config 字段
+  const hasConfig = cfg.runtimeId || cfg.env || cfg.cwd || cfg.timeoutMs
+
+  const parseList = (raw: string) => raw.split(',').map((s) => s.trim()).filter((s) => s.length > 0)
+  const parsedOutputs = parseList(agentOutputsInput.value)
+  const parsedInputs = parseList(agentInputsInput.value)
 
   const data: AgentRaw = {
     id: agentForm.id,
@@ -177,7 +228,10 @@ async function saveAgent() {
     runtime: agentForm.runtime,
     instruction: agentForm.instruction,
     output_file: agentForm.output_file,
-    upstream: agentForm.upstream,
+    outputs: parsedOutputs.length > 0 ? parsedOutputs : undefined,
+    inputs: parsedInputs.length > 0 ? parsedInputs : undefined,
+    memory_sediment: agentForm.memory_sediment ?? false,
+    config: hasConfig ? cfg : undefined,
   }
 
   if (editingAgent.value) {
@@ -194,11 +248,13 @@ function deleteAgent(idx: number) {
   config.value.agents.splice(idx, 1)
 }
 
-function toggleUpstream(agentId: string) {
-  const idx = agentForm.upstream.indexOf(agentId)
-  if (idx === -1) agentForm.upstream.push(agentId)
-  else agentForm.upstream.splice(idx, 1)
-}
+// Implements: tasks.md#T032.2
+// 暴露给组件单测的关键状态（与 WorkspaceView 同模式）
+defineExpose({
+  config,
+  globalSelectedIdx,
+  globalSelectedContent,
+})
 </script>
 
 <template>
@@ -240,10 +296,24 @@ function toggleUpstream(agentId: string) {
                       <NText strong>{{ agent.name }}</NText>
                       <NTag size="small" type="info">{{ agent.id }}</NTag>
                       <NTag size="small" type="warning">{{ agent.runtime }}</NTag>
-                      <NTag size="small" type="success">→ {{ agent.output_file }}</NTag>
-                      <NTag v-if="agent.upstream?.length" size="small">
-                        依赖: {{ agent.upstream.join(', ') }}
+                      <NTag size="small" type="success">→ {{ agent.output_file || '(无文件)' }}</NTag>
+                      <NTag v-if="agent.outputs?.length" size="small" type="success">
+                        out: {{ agent.outputs.join(', ') }}
                       </NTag>
+                      <NTag v-if="agent.inputs?.length" size="small" type="info">
+                        in: {{ agent.inputs.join(', ') }}
+                      </NTag>
+                      <!--
+                        Implements: tasks.md#T028 / plan.md#D-03
+                        列表上的 memory_sediment 指示标签（开启=沉淀，关闭=隐藏）
+                      -->
+                      <NTag v-if="agent.memory_sediment" size="small" type="info">沉淀</NTag>
+                      <!--
+                        Implements: docs/adr/0001-workflow-execution-model.md (Phase 2)
+                        列表上的 runtime config 指示标签（任意字段非空时显示）
+                      -->
+                      <NTag v-if="agent.config && (agent.config.runtimeId || agent.config.cwd || agent.config.timeoutMs || (agent.config.env && Object.keys(agent.config.env).length))"
+                        size="small" type="warning">runtime cfg</NTag>
                     </NSpace>
                   </template>
                   <template #description>
@@ -479,16 +549,74 @@ function toggleUpstream(agentId: string) {
             </NFormItem>
           </div>
 
-          <NFormItem label="上游依赖">
-            <NSpace wrap>
-              <NCheckbox
-                v-for="aid in agentIds.filter(id => id !== agentForm.id)"
-                :key="aid"
-                :checked="agentForm.upstream.includes(aid)"
-                @update:checked="toggleUpstream(aid)"
-              >{{ aid }}</NCheckbox>
-              <NText v-if="!agentIds.filter(id => id !== agentForm.id).length" depth="3" style="font-size:12px;">无其他 Agent</NText>
-            </NSpace>
+          <div style="display: flex; gap: 10px;">
+            <NFormItem label="输出 handle（逗号分隔）" style="flex: 1;">
+              <NInput v-model:value="agentOutputsInput" placeholder="如 spec.md 或 code, tests" />
+            </NFormItem>
+            <NFormItem label="输入 handle（逗号分隔）" style="flex: 1;">
+              <NInput v-model:value="agentInputsInput" placeholder="如 default 或 spec.md, plan.md" />
+            </NFormItem>
+          </div>
+
+          <!--
+            Implements: tasks.md#T028 / plan.md#D-03
+            memory_sediment：开启后该 Agent 在阶段执行结束时把状态摘要沉淀到 memory/MEMORY.md
+          -->
+          <NFormItem label="记忆沉淀">
+            <NCheckbox v-model:checked="agentForm.memory_sediment">
+              完成后把状态摘要写入 memory/MEMORY.md
+            </NCheckbox>
+          </NFormItem>
+
+          <!--
+            Implements: docs/adr/0001-workflow-execution-model.md (Phase 2)
+            per-agent runtime config（YAML 级默认；workflow_nodes.config_json 覆盖）
+          -->
+          <NFormItem label="运行时配置">
+            <NText depth="3" style="font-size:11px;">每 Agent 独立覆盖运行行为；per-node 在画布编辑时可进一步覆盖。</NText>
+          </NFormItem>
+          <NFormItem label="运行时 ID">
+            <NSelect
+              :value="agentForm.config?.runtimeId ?? ''"
+              :options="[{ label: '（使用默认）', value: '' }, ...runtimeOptions]"
+              @update:value="(v: string) => { agentForm.config = { ...(agentForm.config ?? {}), runtimeId: v } }"
+            />
+          </NFormItem>
+          <NFormItem label="环境变量">
+            <div style="display:flex;flex-direction:column;gap:6px;width:100%;">
+              <div v-for="(entry, i) in agentEnvList" :key="i" style="display:flex;gap:6px;align-items:center;">
+                <NInput
+                  :value="entry.key"
+                  placeholder="KEY"
+                  style="flex:1;"
+                  @update:value="(v: string) => { entry.key = v }"
+                />
+                <NInput
+                  :value="entry.value"
+                  placeholder="value"
+                  style="flex:1;"
+                  @update:value="(v: string) => { entry.value = v }"
+                />
+                <NButton size="tiny" type="error" ghost @click="agentEnvList.splice(i, 1)">✕</NButton>
+              </div>
+              <NButton size="tiny" @click="agentEnvList.push({ key: '', value: '' })">+ 添加变量</NButton>
+            </div>
+          </NFormItem>
+          <NFormItem label="工作目录 (cwd)">
+            <NInput
+              :value="agentForm.config?.cwd ?? ''"
+              placeholder="留空则使用 <localPath>/repo"
+              @update:value="(v: string) => { agentForm.config = { ...(agentForm.config ?? {}), cwd: v } }"
+            />
+          </NFormItem>
+          <NFormItem label="超时 (ms)">
+            <NInputNumber
+              :value="agentForm.config?.timeoutMs"
+              placeholder="留空则不超时"
+              :min="1"
+              style="width:100%;"
+              @update:value="(v: number | null) => { agentForm.config = { ...(agentForm.config ?? {}), timeoutMs: v ?? undefined } }"
+            />
           </NFormItem>
         </NForm>
 

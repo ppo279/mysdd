@@ -7,7 +7,9 @@ import type {
   RuntimeAdapter,
   SendResult,
   StreamChunk,
+  QuestionItem,
 } from './adapter.js'
+import { BizError, Code } from '../lib/envelope.js'
 
 // stream-json 输出的事件结构（claude-code 兼容格式）
 interface StreamEvent {
@@ -62,6 +64,9 @@ export async function* spawnCliStream(
   stdinContent?: string,
   cwd?: string,
   cleanupFiles?: string[], // temp files to delete after the process exits
+  env?: Record<string, string>, // session-level env override; merged with process.env
+  timeoutMs?: number,          // hard kill after this many ms
+  signal?: AbortSignal,        // abort signal: abort() → SIGTERM child process
 ): AsyncIterable<SpawnOutput> {
   // Default to home dir so the CLI doesn't pick up any project CLAUDE.md.
   // Callers pass the workspace localPath when they want the agent to work inside a project.
@@ -72,7 +77,15 @@ export async function* spawnCliStream(
     cliLog(`[CLI] cwd:   ${resolvedCwd}`)
     if (stdinContent)
       cliLog(`[CLI] stdin: ${stdinContent.slice(0, 120).replace(/\n/g, '↵')}`)
+    if (env && Object.keys(env).length) cliLog(`[CLI] env overrides: ${Object.keys(env).join(', ')}`)
+    if (timeoutMs) cliLog(`[CLI] timeout: ${timeoutMs}ms`)
   }
+
+  // Process env + per-session env (session wins)
+  const mergedEnv: NodeJS.ProcessEnv | undefined =
+    env && Object.keys(env).length > 0
+      ? { ...process.env, ...env }
+      : undefined
 
   const proc = spawn(command, args, {
     stdio: [
@@ -82,10 +95,29 @@ export async function* spawnCliStream(
     ],
     shell: process.platform === 'win32',
     cwd: resolvedCwd,
+    env: mergedEnv,
   })
 
   if (stdinContent !== undefined && proc.stdin) {
     proc.stdin.end(stdinContent)
+  }
+
+  // 外部中止信号（停止按钮）：收到 abort → SIGTERM 子进程
+  if (signal) {
+    const onAbort = () => { try { proc.kill('SIGTERM') } catch { /* already dead */ } }
+    signal.addEventListener('abort', onAbort, { once: true })
+    proc.once('close', () => signal.removeEventListener('abort', onAbort))
+  }
+
+  // Phase 2: 硬超时。计时器在 spawn 成功后挂上；超时后调 proc.kill()，
+  // 子进程以非 0 退出 → 走 Code.CLI_EXIT_NONZERO 路径，错误消息加 (killed-by-timeout) 提示
+  let killTimer: NodeJS.Timeout | undefined
+  if (timeoutMs && timeoutMs > 0) {
+    killTimer = setTimeout(() => {
+      if (DEBUG) cliLog(`[CLI] timeout (${timeoutMs}ms) reached, killing pid ${proc.pid}`)
+      try { proc.kill('SIGTERM') } catch { /* already dead */ }
+    }, timeoutMs)
+    // 进程退出后清理计时器（写在 close handler 里更安全，但 IIFE 末尾也能关）
   }
 
   const spawnError = await new Promise<Error | null>((resolve) => {
@@ -93,8 +125,10 @@ export async function* spawnCliStream(
     proc.once('spawn', () => resolve(null))
   })
   if (spawnError)
-    throw new Error(
+    throw new BizError(
+      Code.CLI_SPAWN_FAILED,
       `无法启动 "${command}"：${spawnError.message}。请确认已安装并在 PATH 中，或在运行时配置中填写完整路径。`,
+      502,
     )
 
   if (DEBUG) cliLog(`[CLI] process spawned (pid ${proc.pid})`)
@@ -197,6 +231,15 @@ export async function* spawnCliStream(
               : undefined
             // 如果 input 是空字符串（CLI 偶尔发 ""），降级为 undefined
             if (input === '' || input === null) input = undefined
+
+            // AskUserQuestion：额外发一个 question chunk，供前端渲染结构化问卡
+            if (slot.name === 'AskUserQuestion') {
+              const qi = (input as { questions?: QuestionItem[] })?.questions
+              if (Array.isArray(qi) && qi.length > 0) {
+                yield { kind: 'question', questions: qi }
+              }
+            }
+
             yield {
               kind: 'tool',
               phase: 'end',
@@ -232,6 +275,7 @@ export async function* spawnCliStream(
 
   await new Promise<void>((resolve, reject) => {
     proc.on('close', (code) => {
+      if (killTimer) clearTimeout(killTimer)
       cliLog(
         `[CLI exit] code=${code}, stdout lines=${lineCount}${stderrLines.length ? `, stderr lines=${stderrLines.length}` : ''}`,
       )
@@ -248,7 +292,13 @@ export async function* spawnCliStream(
       } else {
         if (stderrLines.length)
           process.stderr.write(`[${command} stderr]\n${stderrLines.join('')}\n`)
-        reject(new Error(`"${command}" exited with code ${code}`))
+        reject(
+          new BizError(
+            Code.CLI_EXIT_NONZERO,
+            `"${command}" exited with code ${code}`,
+            502,
+          ),
+        )
       }
     })
   })
@@ -310,7 +360,13 @@ export async function wrapSessionStream(
         notify = undefined
       }
       if (!sessionFound)
-        sessionReject(new Error(`${commandName} CLI did not return a session_id`))
+        sessionReject(
+          new BizError(
+            Code.CLI_NO_SESSION_ID,
+            `${commandName} CLI did not return a session_id`,
+            502,
+          ),
+        )
     } catch (e) {
       streamError = e as Error
       sessionReject(e as Error)
@@ -348,6 +404,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
     systemPrompt: string,
     firstMessage: string,
     cwd?: string,
+    options?: import('./adapter.js').SessionOptions,
   ): Promise<SendResult> {
     // Use --print to trigger non-interactive mode (enables stream-json + verbose streaming)
     const args: string[] = [
@@ -368,7 +425,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
     }
 
     return wrapSessionStream(
-      spawnCliStream(this.command, args, firstMessage, cwd, cleanupFiles),
+      spawnCliStream(this.command, args, firstMessage, cwd, cleanupFiles, options?.env, options?.timeoutMs, options?.signal),
       this.command,
     )
   }
@@ -377,6 +434,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
     sessionId: string,
     message: string,
     cwd?: string,
+    options?: import('./adapter.js').SessionOptions,
   ): AsyncIterable<StreamChunk> {
     const cmd = this.command
     const args = [
@@ -388,7 +446,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
       '--verbose',
     ]
     async function* s(): AsyncIterable<StreamChunk> {
-      for await (const e of spawnCliStream(cmd, args, message, cwd)) {
+      for await (const e of spawnCliStream(cmd, args, message, cwd, undefined, options?.env, options?.timeoutMs, options?.signal)) {
         if ('sessionId' in e) continue
         yield e
       }

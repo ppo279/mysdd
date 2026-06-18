@@ -18,11 +18,12 @@ sqlite.pragma('foreign_keys = ON')
 export const db = drizzle(sqlite, { schema })
 
 // 建表（简单 migration）
-export function initDb() {
-  // Add columns that may not exist in older databases
-  try { sqlite.exec(`ALTER TABLE workspaces ADD COLUMN local_path TEXT NOT NULL DEFAULT ''`) } catch { /* already exists */ }
+// Implements: docs/adr/0001-workflow-execution-model.md
+// Phase 0: 引入工作流 + 节点状态表 + 边 + 产物表。strict MG1：
+// 老 DB 不会自动迁移到新 schema，调用方需要在启动前 `rm data/sdd.db data/sdd.db-*`。
 
-  sqlite.exec(`
+// 导出供测试复用：initDb() 实际执行的 CREATE TABLE 串
+export const SCHEMA_SQL = `
     CREATE TABLE IF NOT EXISTS workspaces (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -64,5 +65,85 @@ export function initDb() {
       content TEXT NOT NULL,
       created_at INTEGER NOT NULL
     );
-  `)
+
+    CREATE TABLE IF NOT EXISTS workflows (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      is_archived INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_workflows_workspace ON workflows(workspace_id);
+
+    CREATE TABLE IF NOT EXISTS workflow_nodes (
+      id TEXT PRIMARY KEY,
+      workflow_id TEXT NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+      node_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      position_x REAL NOT NULL DEFAULT 0,
+      position_y REAL NOT NULL DEFAULT 0,
+      config_json TEXT NOT NULL DEFAULT '{}',
+      display_name TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL,
+      UNIQUE(workflow_id, node_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_workflow_nodes_workflow ON workflow_nodes(workflow_id);
+
+    CREATE TABLE IF NOT EXISTS workflow_edges (
+      id TEXT PRIMARY KEY,
+      workflow_id TEXT NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+      from_node_id TEXT NOT NULL,
+      from_output TEXT NOT NULL DEFAULT 'default',
+      to_node_id TEXT NOT NULL,
+      to_input TEXT NOT NULL DEFAULT 'default',
+      created_at INTEGER NOT NULL,
+      UNIQUE(workflow_id, from_node_id, from_output, to_node_id, to_input)
+    );
+    CREATE INDEX IF NOT EXISTS idx_workflow_edges_workflow ON workflow_edges(workflow_id);
+
+    CREATE TABLE IF NOT EXISTS feature_node_states (
+      feature_id TEXT NOT NULL REFERENCES features(id) ON DELETE CASCADE,
+      node_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      last_stage_run_id TEXT,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (feature_id, node_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_fns_feature ON feature_node_states(feature_id);
+
+    CREATE TABLE IF NOT EXISTS stage_run_outputs (
+      id TEXT PRIMARY KEY,
+      stage_run_id TEXT NOT NULL REFERENCES stage_runs(id) ON DELETE CASCADE,
+      output_name TEXT NOT NULL DEFAULT 'default',
+      content TEXT NOT NULL DEFAULT '',
+      approved_at INTEGER,
+      UNIQUE(stage_run_id, output_name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_sro_run ON stage_run_outputs(stage_run_id);
+
+    CREATE TABLE IF NOT EXISTS feature_node_migrations (
+      id TEXT PRIMARY KEY,
+      feature_id TEXT NOT NULL REFERENCES features(id) ON DELETE CASCADE,
+      from_workflow_id TEXT NOT NULL,
+      to_workflow_id TEXT NOT NULL,
+      mapping_json TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      applied_at INTEGER
+    );
+  `
+
+export function initDb() {
+  // Order matters: all CREATE TABLEs run first, then ALTER TABLEs that add
+  // nullable/FK columns referencing tables that didn't exist on first init.
+  sqlite.exec(SCHEMA_SQL)
+
+  // Idempotent column adds for older DBs. Each ALTER is wrapped in try/catch
+  // because the column may already exist (caught) or the table is new (succeeds).
+  try { sqlite.exec(`ALTER TABLE workspaces ADD COLUMN local_path TEXT NOT NULL DEFAULT ''`) } catch { /* already exists */ }
+  try { sqlite.exec(`ALTER TABLE workspaces ADD COLUMN default_workflow_id TEXT REFERENCES workflows(id)`) } catch { /* already exists */ }
+  try { sqlite.exec(`ALTER TABLE features ADD COLUMN current_workflow_id TEXT REFERENCES workflows(id)`) } catch { /* already exists */ }
+  try { sqlite.exec(`ALTER TABLE features ADD COLUMN current_node_id TEXT NOT NULL DEFAULT 'spec'`) } catch { /* already exists */ }
+  try { sqlite.exec(`ALTER TABLE stage_runs ADD COLUMN node_id TEXT`) } catch { /* already exists */ }
 }
