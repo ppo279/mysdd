@@ -489,6 +489,8 @@ function colorizeDiffLine(line: string): { color: string; bg: string } {
             <NTag v-if="isActiveRunApproved" type="success" size="small" round>已批准</NTag>
             <NTag v-if="isApproved" type="success" size="small" round>待合并</NTag>
             <NTag v-else-if="isMerged" type="success" size="small" round>已合并</NTag>
+            <!-- Implements: docs/prd/0001-bug-fix-workflow.md (Issue 05) -->
+            <NTag v-else-if="featureStatus === 'queued'" type="warning" size="small" round>排队中</NTag>
           </NSpace>
         </div>
 

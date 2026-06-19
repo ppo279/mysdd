@@ -392,6 +392,11 @@ export interface Feature {
   lockedFiles: string[] | null
   looksLike: 'true_bug' | 'spec_gap' | 'missing_feature' | 'design_flaw' | null
   createdAt: string
+  // Implements: docs/prd/0001-bug-fix-workflow.md (Issue 05)
+  // Only set for status='queued' features: in-flight bug_fix siblings whose
+  // locked_files overlap this feature's claim. Used for the "waiting on X"
+  // tooltip in the workspace list.
+  blockedBy?: Array<{ id: string; status: string }>
 }
 
 // Implements: docs/prd/0001-bug-fix-workflow.md (Issue 04)

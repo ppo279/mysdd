@@ -35,6 +35,7 @@ import { BizError, Code } from '../lib/envelope.js'
 import { assertWithinWorkspaceBase } from '../routes/workspaces.js'
 import { ensureFeatureWorktree } from './worktree.js'
 import { runGatekeeper } from './gatekeeper.js'
+import { maybeQueueFeature } from './queue.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const STORAGE_ROOT = path.resolve(__dirname, '../../../storage')
@@ -500,6 +501,15 @@ export class AgentService {
     // 把 bug_analysis.json 的 looks_like + suspected_files[*].path 写入 features。
     // 解析失败时静默跳过——不影响 approve 主流程，留待后续 issue 引入结构化校验。
     await this.tryClaimBugAnalysisLocks(featureId, run.nodeId, outputs)
+
+    // Implements: docs/prd/0001-bug-fix-workflow.md (Issue 05)
+    // After locked_files is written, check for overlap with other in-flight
+    // bug_fix features in the same workspace. On conflict, transition this
+    // feature to status='queued' so downstream stages don't start until the
+    // lock conflict clears.
+    if (run.nodeId === 'analyze') {
+      await maybeQueueFeature(featureId)
+    }
 
     // Implements: docs/prd/0001-bug-fix-workflow.md (Issue 03)
     // 当 feature 是 bug_fix 且刚刚审批通过的是 code-surgeon (nodeId='fix')，

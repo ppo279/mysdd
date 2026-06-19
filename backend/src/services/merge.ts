@@ -25,6 +25,7 @@ import {
 import { BizError, Code } from '../lib/envelope.js'
 import { ArtifactService } from './artifact.js'
 import { assertWithinWorkspaceBase } from '../routes/workspaces.js'
+import { evaluateQueueForWorkspace } from './queue.js'
 
 // ============================================================================
 // Constants
@@ -455,6 +456,19 @@ async function finalizeMerge(
     .update(features)
     .set({ status: 'merged', lockedFiles: null })
     .where(eq(features.id, featureId))
+
+  // 1b. Implements: docs/prd/0001-bug-fix-workflow.md (Issue 05).
+  // The merge releases this feature's locks, so any queued sibling in the
+  // same workspace that no longer conflicts should auto-promote to 'active'.
+  try {
+    const [feat] = await db.select().from(features).where(eq(features.id, featureId))
+    if (feat) {
+      await evaluateQueueForWorkspace(feat.workspaceId)
+    }
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('[merge] evaluateQueueForWorkspace failed:', err)
+  }
 
   // 2. Fire-and-forget: notify other in-flight features in the same workspace
   //    that they should rebase. Issue 06 will implement the actual rebase

@@ -23,6 +23,7 @@ import { BizError, Code, ok } from '../lib/envelope.js'
 import { createSyntheticIntakeRun, parseWorkflowInputs } from '../services/intake.js'
 import { removeFeatureWorktree, ensureFeatureWorktree } from '../services/worktree.js'
 import { loadAuditReport, commitFeatureFix } from '../services/merge.js'
+import { clearFeatureLocks, evaluateQueueForWorkspace, LOCK_RELEASING_STATUSES, findConflictingSiblings, parseLockedFiles } from '../services/queue.js'
 
 // Implements: docs/prd/0001-bug-fix-workflow.md (Issue 01)
 const FeatureIntentSchema = z.enum(['bug_fix', 'spec_change', 'new_feature', 'refactor'])
@@ -37,6 +38,10 @@ const CreateFeatureSchema = z.object({
 
 export async function featureRoutes(app: FastifyInstance) {
   // 列出 workspace 下的 features
+  // Implements: docs/prd/0001-bug-fix-workflow.md (Issue 05)
+  // For each queued feature, attach `blockedBy` listing the in-flight bug_fix
+  // siblings whose locked_files overlap — used by the frontend to render the
+  // "waiting on bugfix/feat-X" tooltip.
   app.get('/api/workspaces/:workspaceId/features', async (req, reply) => {
     const { workspaceId } = req.params as { workspaceId: string }
     const rows = await db
@@ -44,7 +49,15 @@ export async function featureRoutes(app: FastifyInstance) {
       .from(features)
       .where(eq(features.workspaceId, workspaceId))
       .orderBy(asc(features.createdAt))
-    return ok(reply, rows)
+    const enriched = await Promise.all(
+      rows.map(async (f) => {
+        if (f.status !== 'queued') return f
+        const candidates = parseLockedFiles(f.lockedFiles)
+        const siblings = await findConflictingSiblings(workspaceId, candidates, f.id)
+        return { ...f, blockedBy: siblings }
+      }),
+    )
+    return ok(reply, enriched)
   })
 
   // 创建 feature
@@ -123,6 +136,19 @@ export async function featureRoutes(app: FastifyInstance) {
     const intent: 'bug_fix' | 'spec_change' | 'new_feature' | 'refactor' =
       body.intent ?? (inferredFromBugIntake ? 'bug_fix' : 'new_feature')
 
+    // Implements: docs/prd/0001-bug-fix-workflow.md (Issue 05).
+    // Per spec: "POST /api/workspaces/:workspaceId/features intersects the new
+    // feature's candidate `locked_files` (or empty if not yet analyzed)
+    // against all in-flight bug-fix features in the same workspace. On
+    // overlap, the new feature is created in `queued` status."
+    //
+    // At creation time the candidate is always empty (bug-analyst hasn't run),
+    // so the intersect never fires here. The actual queuing happens after
+    // AgentService.approveStage writes locked_files for the analyze node and
+    // calls maybeQueueFeature — see backend/src/services/agent.ts.
+    //
+    // We still create the feature as 'active' here; the queue transition is
+    // a runtime concern that happens once the agent finishes analyze.
     const feature = {
       id: randomUUID(),
       workspaceId,
@@ -304,6 +330,34 @@ export async function featureRoutes(app: FastifyInstance) {
 
     await db.delete(features).where(eq(features.id, featureId))
     return ok(reply, null)
+  })
+
+  // Implements: docs/prd/0001-bug-fix-workflow.md (Issue 05)
+  // POST /api/features/:featureId/abandon
+  // Mark a bug_fix feature as 'abandoned' (user-initiated halt), release its
+  // locked_files, and trigger queue evaluation so queued siblings can run.
+  // 409 if the feature is already in a terminal state (merged, abandoned, etc.).
+  app.post('/api/features/:featureId/abandon', async (req, reply) => {
+    const { featureId } = req.params as { featureId: string }
+    const [feature] = await db.select().from(features).where(eq(features.id, featureId))
+    if (!feature) throw new BizError(Code.FEATURE_NOT_FOUND, 'Feature not found', 404)
+
+    if ((LOCK_RELEASING_STATUSES as readonly string[]).includes(feature.status)) {
+      throw new BizError(
+        Code.WORKFLOW_INVALID,
+        `Feature ${featureId} is already in terminal status '${feature.status}'; cannot abandon`,
+        409,
+      )
+    }
+
+    await db
+      .update(features)
+      .set({ status: 'abandoned' })
+      .where(eq(features.id, featureId))
+    await clearFeatureLocks(featureId)
+    await evaluateQueueForWorkspace(feature.workspaceId)
+
+    return ok(reply, { id: featureId, status: 'abandoned' })
   })
 
   // Implements: docs/prd/0001-bug-fix-workflow.md (Issue 04)

@@ -51,6 +51,7 @@ import {
   getNodeRepairBudget,
   getTotalRepairBudget,
 } from './rejection.js'
+import { clearFeatureLocks, evaluateQueueForWorkspace } from './queue.js'
 
 const AUDIT_NODE_ID = 'audit'
 const FIX_NODE_ID = 'fix'
@@ -248,11 +249,16 @@ async function cascadeOnRejection(opts: CascadeOpts): Promise<CascadeResult> {
   const perNodeBudget = await loadNodeBudget(feature.currentWorkflowId, targetNodeId)
   const consumed = await countRepairBudgetConsumed(feature.id)
   if (isBudgetExhausted(consumed, targetNodeId, { perNode: perNodeBudget, total })) {
-    // Halve the feature — circuit-breaker
+    // Halve the feature — circuit-breaker.
+    // Implements: docs/prd/0001-bug-fix-workflow.md (Issue 05).
+    // Releasing the lock lets queued siblings in the same workspace promote
+    // to 'active' without waiting for human intervention.
     await db
       .update(features)
       .set({ status: 'circuit_broken' })
       .where(eq(features.id, feature.id))
+    await clearFeatureLocks(feature.id)
+    await evaluateQueueForWorkspace(feature.workspaceId)
     return {
       targetNodeId,
       newStageRunId: null,

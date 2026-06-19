@@ -169,6 +169,24 @@ async function handleDeleteFeature(feature: Feature) {
   }
 }
 
+// Implements: docs/prd/0001-bug-fix-workflow.md (Issue 05)
+// Tooltip for the "排队中" tag. Per spec: user should see "waiting on
+// bugfix/feat-X" — surface the sibling feature id(s) holding the conflicting
+// lock; fall back to the local claim preview when the backend didn't attach
+// blockedBy (defensive).
+function queuedReason(feature: Feature): string {
+  const blockers = feature.blockedBy ?? []
+  if (blockers.length === 0) {
+    const files = feature.lockedFiles ?? []
+    if (files.length === 0) return '排队中：等待锁释放'
+    const preview = files.slice(0, 3).join(', ')
+    const more = files.length > 3 ? ` 等 ${files.length} 个文件` : ''
+    return `排队中：等待其他 Feature 释放 ${preview}${more}`
+  }
+  const ids = blockers.map((b) => `bugfix/${b.id.slice(0, 8)}`).join(', ')
+  return `排队中：等待 ${ids}`
+}
+
 // Implements: tasks.md#T025 / T026 / T027
 // 暴露给组件单测的关键状态（不暴露整个 detail，避免误改）
 defineExpose({
@@ -247,7 +265,21 @@ defineExpose({
             <NThing :title="feature.name" :description="feature.description || '无描述'">
               <template #header-extra>
                 <NSpace align="center" :size="6">
-                  <NTag v-if="feature.status === 'done'" type="success" size="small" round>完成</NTag>
+                  <!-- Implements: docs/prd/0001-bug-fix-workflow.md (Issue 05) -->
+                  <NTag
+                    v-if="feature.status === 'queued'"
+                    type="warning"
+                    size="small"
+                    round
+                    :title="queuedReason(feature)"
+                  >
+                    排队中
+                  </NTag>
+                  <NTag v-else-if="feature.status === 'done'" type="success" size="small" round>完成</NTag>
+                  <NTag v-else-if="feature.status === 'merged'" type="success" size="small" round>已合并</NTag>
+                  <NTag v-else-if="feature.status === 'circuit_broken'" type="error" size="small" round>已熔断</NTag>
+                  <NTag v-else-if="feature.status === 'abandoned'" type="default" size="small" round>已废弃</NTag>
+                  <NTag v-else-if="feature.status === 'approved'" type="info" size="small" round>待合并</NTag>
                   <NTag :type="STAGE_TYPES[feature.currentStage] ?? 'default'" size="small">
                     {{ STAGE_LABELS[feature.currentStage] ?? feature.currentStage }}
                   </NTag>
