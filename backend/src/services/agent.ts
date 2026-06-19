@@ -125,9 +125,7 @@ async function resolveSessionOptions(
   const runtimeId = merged?.runtimeId ?? agent.runtime
 
   const { cwd, worktreePath } = await resolveEffectiveCwd(feature, localPath, merged?.cwd)
-  if (merged?.cwd) {
-    // Per-node / per-agent 显式 cwd 已在 resolveEffectiveCwd 守卫
-  }
+  // resolveEffectiveCwd already guards explicit cwd via assertWithinWorkspaceBase.
 
   return {
     runtimeId,
@@ -379,7 +377,17 @@ export class AgentService {
     // Phase 2: resume 也走 resolveSessionOptions，让 per-node / per-agent config
     // 在同一会话中保持一致（避免 start 时 cwd=A、resume 时 cwd=B）
     // Issue 02: feature 必须传进来以决定 worktree cwd
-    const resumeFeature = feature ? { id: feature.id, intent: feature.intent } : { id: run.featureId, intent: 'new_feature' }
+    if (!feature) {
+      // A resume for an orphaned run is unrecoverable; fail loudly rather than
+      // silently falling back to a default intent (which would route the
+      // resume into the main repo instead of the bug-fix worktree).
+      throw new BizError(
+        Code.FEATURE_NOT_FOUND,
+        `Feature ${run.featureId} not found for resumed run ${stageRunId}`,
+        404,
+      )
+    }
+    const resumeFeature = { id: feature.id, intent: feature.intent }
     const { runtimeId: effectiveRuntimeId, options: sessionOptions } = await resolveSessionOptions(
       resumeFeature,
       effectiveNodeConfigJson,

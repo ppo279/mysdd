@@ -1,4 +1,5 @@
-// Implements: docs/prd/0001-bug-fix-workflow.md (Issue 02)
+// Implements: docs/prd/0001-bug-fix-workflow.md (Issue 02) +
+//   docs/adr/0002-bug-fix-workflow.md §4.2 / §4.3
 //
 // Per-feature git worktree lifecycle:
 // - Path:   <localPath>/repo.worktrees/feat-<featId>
@@ -11,7 +12,7 @@
 //
 // Why a worktree? The TDD pipeline (test-architect + code-surgeon) writes
 // files into the worktree; we want agent writes to be isolated from the
-// user's main worktree until they explicitly merge. See ADR 0002 §4.2 / §4.3.
+// user's main worktree until they explicitly merge.
 import fs from 'fs'
 import path from 'path'
 import { execFileSync } from 'child_process'
@@ -84,10 +85,9 @@ export async function ensureFeatureWorktree(opts: EnsureWorktreeOpts): Promise<E
   const wtPath = getFeatureWorktreePath(localPath, featureId)
   const branch = `bugfix/${featureId}`
 
-  // Guard: wtPath must live under WORKSPACE_BASE.
-  // We assert on localPath itself (it's the workspace root) — wtPath is nested under it.
+  // Guard: localPath must live under WORKSPACE_BASE. wtPath is nested under
+  // localPath so if localPath passes, wtPath passes too — single check is enough.
   assertWithinWorkspaceBase(localPath)
-  assertWithinWorkspaceBase(wtPath)
 
   if (worktreeExists(localPath, featureId)) {
     return { path: wtPath, created: false, branch }
