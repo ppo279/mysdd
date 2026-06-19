@@ -372,5 +372,17 @@ export async function runGatekeeper(opts: RunGatekeeperOpts): Promise<RunGatekee
     })
   }
 
+  // Implements: docs/prd/0001-bug-fix-workflow.md (Issue 04)
+  // On APPROVED, transition features.status → 'approved' so the merge
+  // button is enabled. This is the only place that sets this status;
+  // reject paths leave status='active' (the workflow engine keeps
+  // running retries until budget exhaustion → 'circuit_broken').
+  if (isApproved(verdict)) {
+    await db
+      .update(features)
+      .set({ status: 'approved' })
+      .where(eq(features.id, opts.featureId))
+  }
+
   return { verdict, auditStageRunId: persisted.stageRunId, cascade }
 }

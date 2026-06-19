@@ -21,7 +21,8 @@ import { toposort } from '../services/workflow.js'
 import { ArtifactService } from '../services/artifact.js'
 import { BizError, Code, ok } from '../lib/envelope.js'
 import { createSyntheticIntakeRun, parseWorkflowInputs } from '../services/intake.js'
-import { removeFeatureWorktree } from '../services/worktree.js'
+import { removeFeatureWorktree, ensureFeatureWorktree } from '../services/worktree.js'
+import { loadAuditReport, commitFeatureFix } from '../services/merge.js'
 
 // Implements: docs/prd/0001-bug-fix-workflow.md (Issue 01)
 const FeatureIntentSchema = z.enum(['bug_fix', 'spec_change', 'new_feature', 'refactor'])
@@ -303,6 +304,75 @@ export async function featureRoutes(app: FastifyInstance) {
 
     await db.delete(features).where(eq(features.id, featureId))
     return ok(reply, null)
+  })
+
+  // Implements: docs/prd/0001-bug-fix-workflow.md (Issue 04)
+  // GET /api/features/:featureId/audit-report
+  // Returns the latest quality-gatekeeper audit run (approved OR rejected)
+  // plus the structured fields the UI needs:
+  //   - verdict / rejectionReason
+  //   - 3-phase reverse validation table (forward / reverse / reapply)
+  //   - mutation_score / coverage_delta
+  //   - fix.patch content (for the diff view)
+  //   - reproduction_test content (for the test-link panel)
+  //   - bug_analysis.symptom (used by the merge commit message)
+  // 404 when no audit has run yet.
+  app.get('/api/features/:featureId/audit-report', async (req, reply) => {
+    const { featureId } = req.params as { featureId: string }
+    const [feature] = await db.select().from(features).where(eq(features.id, featureId))
+    if (!feature) throw new BizError(Code.FEATURE_NOT_FOUND, 'Feature not found', 404)
+
+    const data = await loadAuditReport(featureId, feature.workspaceId)
+    if (!data) {
+      throw new BizError(
+        Code.WORKFLOW_INVALID,
+        `Feature ${featureId} has no audit report yet (gatekeeper has not run)`,
+        404,
+      )
+    }
+    return ok(reply, data)
+  })
+
+  // Implements: docs/prd/0001-bug-fix-workflow.md (Issue 04) + CONTEXT.md FB2/TF1
+  // POST /api/features/:featureId/merge
+  // Squashes the agent commits on bugfix/<featId> into a single review commit
+  // with the TF1 commit message (Bug: / Adds regression test: / Audit: trailers).
+  // 409 when the feature is not 'approved' (gatekeeper hasn't approved, or
+  // already merged).
+  app.post('/api/features/:featureId/merge', async (req, reply) => {
+    const { featureId } = req.params as { featureId: string }
+    const [feature] = await db.select().from(features).where(eq(features.id, featureId))
+    if (!feature) throw new BizError(Code.FEATURE_NOT_FOUND, 'Feature not found', 404)
+    if (feature.status !== 'approved') {
+      throw new BizError(
+        Code.WORKFLOW_INVALID,
+        `Feature ${featureId} is not approved (current status: ${feature.status}); merge requires status='approved'`,
+        409,
+      )
+    }
+
+    // Resolve the worktree path. Reuse the worktree service so the call is
+    // idempotent and symlinks node_modules as needed.
+    const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, feature.workspaceId))
+    if (!ws?.localPath) {
+      throw new BizError(
+        Code.WORKFLOW_INVALID,
+        `Feature ${featureId} has no workspace localPath; cannot resolve worktree`,
+        400,
+      )
+    }
+    const wt = await ensureFeatureWorktree({ featureId, localPath: ws.localPath })
+
+    const result = await commitFeatureFix({
+      featureId,
+      workspaceId: feature.workspaceId,
+      featureWorktreePath: wt.path,
+    })
+
+    return ok(reply, {
+      ...result,
+      hint: 'The branch is ready to merge into your main branch. No auto-merge has been performed.',
+    })
   })
 
   // 切换 feature 的工作流

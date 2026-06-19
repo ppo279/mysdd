@@ -104,8 +104,24 @@ onMounted(async () => {
   } catch (e: any) {
     message.error(e.message ?? '加载失败')
   }
+  // Implements: docs/prd/0001-bug-fix-workflow.md (Issue 04)
+  // 如果 feature 已经被 gatekeeper 审核过（status=approved），预拉审核报告
+  if (chat.featureDetail?.status === 'approved' || chat.featureDetail?.status === 'merged') {
+    try { await chat.loadAuditReport(featureId) } catch { /* surfaced inline if needed */ }
+  }
   scrollToBottom()
 })
+
+// Implements: docs/prd/0001-bug-fix-workflow.md (Issue 04)
+// feature.status 切到 approved / merged 时重拉审核报告（让"刚批完"也能看到）
+watch(
+  () => chat.featureDetail?.status,
+  async (s) => {
+    if (s === 'approved' || s === 'merged') {
+      try { await chat.loadAuditReport(featureId) } catch { /* ignore */ }
+    }
+  },
+)
 
 watch(
   [
@@ -228,6 +244,35 @@ async function onSwitchApplied() {
   // 重新拉 feature 详情，currentWorkflowId / currentNodeId / nodeStates 都已更新
   await chat.loadFeature(featureId)
   message.success('已切换；当前节点已重置')
+}
+
+// ── 审核 + 合并（Issue 04） ─────────────────────────────────────────
+const isMerging = ref(false)
+const featureStatus = computed(() => chat.featureDetail?.status ?? '')
+const isApproved = computed(() => featureStatus.value === 'approved')
+const isMerged = computed(() => featureStatus.value === 'merged')
+const canMerge = computed(() => isApproved.value && chat.auditReport?.verdict === 'APPROVED')
+
+async function handleMerge() {
+  if (!canMerge.value || isMerging.value) return
+  isMerging.value = true
+  try {
+    const result = await chat.mergeFeature(featureId)
+    message.success(`已合并：${result.branch} @ ${result.commit.slice(0, 7)}`)
+  } catch (e: any) {
+    message.error(e?.message ?? '合并失败')
+  } finally {
+    isMerging.value = false
+  }
+}
+
+// diff 行染色（无外部依赖）：+/→ 红，-/← 绿，@@ / index 蓝
+function colorizeDiffLine(line: string): { color: string; bg: string } {
+  if (line.startsWith('+') && !line.startsWith('+++')) return { color: '#1a7f37', bg: '#e6ffed' }
+  if (line.startsWith('-') && !line.startsWith('---')) return { color: '#cf222e', bg: '#ffebe9' }
+  if (line.startsWith('@@')) return { color: '#8250df', bg: 'transparent' }
+  if (line.startsWith('diff --git') || line.startsWith('index ')) return { color: '#0969da', bg: 'transparent' }
+  return { color: '#57606a', bg: 'transparent' }
 }
 </script>
 
@@ -430,17 +475,172 @@ async function onSwitchApplied() {
         </div>
       </div>
 
-      <!-- 右：产物区 -->
+      <!-- 右：产物区 / 审核区 -->
       <div style="width:440px; flex-shrink:0; display:flex; flex-direction:column; background:#fafafa;">
-        <!-- 产物头 -->
+        <!-- 产物头 / 审核头 -->
         <div style="padding:12px 16px; border-bottom:1px solid #efeff5; background:#fff; flex-shrink:0; display:flex; justify-content:space-between; align-items:center;">
           <NSpace align="center" :size="8">
             <NText strong style="font-size:14px;">
-              产物：{{ STAGE_LABELS[currentStage] ?? currentStage }}
+              <template v-if="isApproved || isMerged">审核报告</template>
+              <template v-else>产物：{{ STAGE_LABELS[currentStage] ?? currentStage }}</template>
             </NText>
             <NTag v-if="isActiveRunApproved" type="success" size="small" round>已批准</NTag>
+            <NTag v-if="isApproved" type="success" size="small" round>待合并</NTag>
+            <NTag v-else-if="isMerged" type="success" size="small" round>已合并</NTag>
           </NSpace>
         </div>
+
+        <!-- Implements: docs/prd/0001-bug-fix-workflow.md (Issue 04) -->
+        <!-- 审核面板：3 阶段反向验证 + mutation score + coverage + fix.patch diff + 合并按钮 -->
+        <div v-if="isApproved || isMerged" style="flex:1; display:flex; flex-direction:column; min-height:0;">
+          <NScrollbar style="flex:1;">
+            <div v-if="!chat.auditReport" style="padding:16px; color:#aaa; font-size:13px;">
+              审核报告加载中…
+            </div>
+            <div v-else style="padding:12px 16px; display:flex; flex-direction:column; gap:16px;">
+              <!-- 结论 -->
+              <NAlert
+                :type="chat.auditReport.verdict === 'APPROVED' ? 'success' : 'error'"
+                :show-icon="true"
+                style="font-size:13px;"
+              >
+                <template #header>
+                  审核结论：{{ chat.auditReport.verdict }}
+                  <span v-if="chat.auditReport.rejectionReason" style="margin-left:8px; font-size:12px; color:#cf222e;">
+                    ({{ chat.auditReport.rejectionReason }})
+                  </span>
+                </template>
+                <div style="font-size:12px; color:#666; margin-top:4px;">
+                  耗时 {{ (chat.auditReport.durationMs / 1000).toFixed(1) }}s ·
+                  修改 {{ chat.auditReport.filesModified.length }} 个文件
+                </div>
+              </NAlert>
+
+              <!-- 3 阶段反向验证表 -->
+              <div>
+                <NText strong style="font-size:13px;">反向验证三阶段</NText>
+                <table style="width:100%; margin-top:6px; border-collapse:collapse; font-size:12px;">
+                  <thead>
+                    <tr style="border-bottom:1px solid #efeff5;">
+                      <th style="text-align:left; padding:4px 6px; color:#888; font-weight:500;">阶段</th>
+                      <th style="text-align:left; padding:4px 6px; color:#888; font-weight:500;">期望</th>
+                      <th style="text-align:left; padding:4px 6px; color:#888; font-weight:500;">结果</th>
+                      <th style="text-align:right; padding:4px 6px; color:#888; font-weight:500;">exit</th>
+                      <th style="text-align:right; padding:4px 6px; color:#888; font-weight:500;">ms</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="p in chat.auditReport.reverseValidationPhases" :key="p.phase"
+                      style="border-bottom:1px solid #f5f5f9;">
+                      <td style="padding:6px; font-family:monospace;">{{ p.phase }}</td>
+                      <td style="padding:6px; font-family:monospace; color:#888;">{{ p.expected }}</td>
+                      <td style="padding:6px;">
+                        <NTag v-if="p.passed === true" type="success" size="small" round>PASS</NTag>
+                        <NTag v-else-if="p.passed === false" type="error" size="small" round>FAIL</NTag>
+                        <NTag v-else size="default" size="small" round>SKIP</NTag>
+                      </td>
+                      <td style="padding:6px; text-align:right; font-family:monospace; color:#666;">{{ p.exitCode ?? '-' }}</td>
+                      <td style="padding:6px; text-align:right; font-family:monospace; color:#666;">{{ p.durationMs }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <!-- Mutation score + Coverage delta -->
+              <div style="display:flex; gap:12px; flex-wrap:wrap;">
+                <div style="flex:1; min-width:160px; padding:8px 10px; background:#fff; border:1px solid #efeff5; border-radius:6px;">
+                  <NText depth="3" style="font-size:11px;">Mutation score</NText>
+                  <div style="font-size:16px; font-weight:600; margin-top:2px;">
+                    <template v-if="chat.auditReport.mutationSkipped">
+                      <NText depth="3" style="font-size:13px;">skipped</NText>
+                    </template>
+                    <template v-else>
+                      {{ ((chat.auditReport.mutationScore ?? 0) * 100).toFixed(0) }}%
+                    </template>
+                  </div>
+                  <NText v-if="chat.auditReport.mutationSkipped" depth="3" style="font-size:11px;">
+                    no framework detected
+                  </NText>
+                </div>
+                <div style="flex:1; min-width:160px; padding:8px 10px; background:#fff; border:1px solid #efeff5; border-radius:6px;">
+                  <NText depth="3" style="font-size:11px;">Coverage delta</NText>
+                  <div style="font-size:16px; font-weight:600; margin-top:2px;">
+                    <template v-if="chat.auditReport.coverageDelta?.toolDetected">
+                      {{ chat.auditReport.coverageDelta.entries.length }} files
+                    </template>
+                    <template v-else>
+                      <NText depth="3" style="font-size:13px;">no tool detected</NText>
+                    </template>
+                  </div>
+                </div>
+              </div>
+
+              <!-- fix.patch diff -->
+              <div>
+                <NText strong style="font-size:13px;">
+                  fix.patch（{{ chat.auditReport.filesModified.length }} 个文件）
+                </NText>
+                <pre style="margin:6px 0 0 0; padding:10px; background:#fafbfc; border:1px solid #efeff5;
+                             border-radius:6px; max-height:240px; overflow:auto;
+                             font-family:'SF Mono','Menlo','Monaco',monospace; font-size:12px;
+                             line-height:1.55; white-space:pre;"><template v-for="(line, idx) in (chat.auditReport.fixPatch || '').split('\n')" :key="idx"><span :style="{
+                  color: colorizeDiffLine(line).color,
+                  background: colorizeDiffLine(line).bg,
+                  display: 'block',
+                }">{{ line }}</span></template></pre>
+              </div>
+
+              <!-- 复现测试链接 / 内容 -->
+              <details>
+                <summary style="cursor:pointer; font-size:13px; font-weight:600; color:#333;">
+                  复现测试（reproduction_test）
+                </summary>
+                <pre style="margin:6px 0 0 0; padding:10px; background:#fafbfc; border:1px solid #efeff5;
+                             border-radius:6px; max-height:200px; overflow:auto;
+                             font-family:'SF Mono','Menlo','Monaco',monospace; font-size:12px;
+                             line-height:1.55; white-space:pre;">{{ chat.auditReport.reproductionTest }}</pre>
+              </details>
+
+              <!-- bug_analysis.symptom -->
+              <div v-if="chat.auditReport.bugAnalysis?.symptom">
+                <NText strong style="font-size:13px;">Bug 症状</NText>
+                <div style="margin-top:4px; padding:8px 10px; background:#fff8c5; border-radius:6px; font-size:12px; line-height:1.6;">
+                  {{ chat.auditReport.bugAnalysis.symptom }}
+                </div>
+              </div>
+
+              <!-- 已合并的提示 -->
+              <NAlert v-if="isMerged && chat.mergeResult" type="success" :show-icon="true" style="font-size:13px;">
+                <template #header>已就绪到 main</template>
+                <div style="font-size:12px; line-height:1.7;">
+                  <div>分支：<NText code style="font-size:12px;">{{ chat.mergeResult.branch }}</NText></div>
+                  <div>Commit：<NText code style="font-size:12px;">{{ chat.mergeResult.commit.slice(0, 12) }}</NText></div>
+                  <div style="margin-top:6px;">{{ chat.mergeResult.hint }}</div>
+                </div>
+              </NAlert>
+            </div>
+          </NScrollbar>
+
+          <!-- 合并操作区（仅 approved 显示） -->
+          <div v-if="isApproved" style="padding:12px 16px; border-top:1px solid #efeff5; background:#fff; flex-shrink:0;">
+            <NText depth="3" style="font-size:12px; display:block; margin-bottom:8px;">
+              确认无误后点击「合并」—— 后端会把 fix + 复现测试压成单条带 TF1 trailers 的 commit 落在
+              <NText code style="font-size:12px;">bugfix/{{ featureId.slice(0, 8) }}…</NText>，不会自动合到 main。
+            </NText>
+            <NButton
+              type="primary"
+              block
+              :loading="isMerging"
+              :disabled="!canMerge || isMerging"
+              @click="handleMerge"
+            >
+              ✓ 合并到 bugfix/{{ featureId.slice(0, 8) }}…
+            </NButton>
+          </div>
+        </div>
+
+        <!-- 产物编辑器（Phase 3：按 outputName 分 tab；旧版本仅 'default'） -->
+        <NScrollbar v-else style="flex:1;">
 
         <!-- 产物编辑器（Phase 3：按 outputName 分 tab；旧版本仅 'default'） -->
         <NScrollbar style="flex:1;">

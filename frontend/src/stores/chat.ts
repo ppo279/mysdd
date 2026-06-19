@@ -1,6 +1,15 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { api, streamPost, type Message, type StageRun, type FeatureDetail, type QuestionItem } from '@/api'
+import {
+  api,
+  streamPost,
+  type Message,
+  type StageRun,
+  type FeatureDetail,
+  type QuestionItem,
+  type AuditReport,
+  type MergeResult,
+} from '@/api'
 
 export interface ToolCall {
   name: string
@@ -26,6 +35,11 @@ export const useChatStore = defineStore('chat', () => {
   const activeTool = ref<{ name: string; input?: unknown } | null>(null)
   const toolLog = ref<ToolCall[]>([])// 已完成的工具调用历史
   const pendingQuestions = ref<QuestionItem[] | null>(null) // AskUserQuestion 拦截
+
+  // Implements: docs/prd/0001-bug-fix-workflow.md (Issue 04)
+  // 审核报告（feature.status='approved' 时显示）+ 合并结果
+  const auditReport = ref<AuditReport | null>(null)
+  const mergeResult = ref<MergeResult | null>(null)
   let _abortCtrl: AbortController | null = null  // 当前流的 fetch AbortController
 
   function resetStreamingProgress() {
@@ -193,6 +207,30 @@ export const useChatStore = defineStore('chat', () => {
     await loadFeature(featureId)
   }
 
+  // Implements: docs/prd/0001-bug-fix-workflow.md (Issue 04)
+  // 拉取 quality-gatekeeper 的最新审核报告。404 时返回 null（审核还没跑过）。
+  async function loadAuditReport(featureId: string) {
+    try {
+      auditReport.value = await api.features.auditReport(featureId)
+    } catch (e: any) {
+      if (e?.status === 404) {
+        auditReport.value = null
+      } else {
+        throw e
+      }
+    }
+  }
+
+  // Implements: docs/prd/0001-bug-fix-workflow.md (Issue 04) + CONTEXT.md FB2/TF1
+  // 把 fix + reproduction test 合并成单条带 TF1 trailers 的 commit
+  // 落在 bugfix/<featId>。返回结果会被前端用于显示"已就绪到 main"的提示。
+  async function mergeFeature(featureId: string): Promise<MergeResult> {
+    const result = await api.features.merge(featureId)
+    mergeResult.value = result
+    await loadFeature(featureId)
+    return result
+  }
+
   function $reset() {
     featureDetail.value = null
     messages.value = []
@@ -205,6 +243,8 @@ export const useChatStore = defineStore('chat', () => {
     activeTool.value = null
     toolLog.value = []
     pendingQuestions.value = null
+    auditReport.value = null
+    mergeResult.value = null
   }
 
   return {
@@ -219,12 +259,16 @@ export const useChatStore = defineStore('chat', () => {
     activeTool,
     toolLog,
     pendingQuestions,
+    auditReport,
+    mergeResult,
     loadFeature,
     startStage,
     sendMessage,
     abortStage,
     answerQuestion,
     approveAndAdvance,
+    loadAuditReport,
+    mergeFeature,
     $reset,
   }
 })

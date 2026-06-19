@@ -133,6 +133,15 @@ export const api = {
         `/api/features/${featureId}/switch-workflow`,
         { method: 'POST', body: JSON.stringify(data) },
       ),
+    // Implements: docs/prd/0001-bug-fix-workflow.md (Issue 04)
+    // 取最新一次 quality-gatekeeper 审核报告（结构化字段 + 3 阶段表 + diff）
+    auditReport: (featureId: string) =>
+      request<AuditReport>(`/api/features/${featureId}/audit-report`),
+    // Implements: docs/prd/0001-bug-fix-workflow.md (Issue 04) + CONTEXT.md FB2/TF1
+    // 把 fix + reproduction test 合并成单条带 TF1 trailers 的 commit 落在
+    // bugfix/<featId>；返回分支名 + commit sha。后端不会自动合到 main。
+    merge: (featureId: string) =>
+      request<MergeResult>(`/api/features/${featureId}/merge`, { method: 'POST' }),
   },
 
   stages: {
@@ -383,6 +392,43 @@ export interface Feature {
   lockedFiles: string[] | null
   looksLike: 'true_bug' | 'spec_gap' | 'missing_feature' | 'design_flaw' | null
   createdAt: string
+}
+
+// Implements: docs/prd/0001-bug-fix-workflow.md (Issue 04)
+export interface AuditReport {
+  verdict: 'APPROVED' | 'REJECTED'
+  rejectionReason: string | null
+  /** 完整 audit_report.md 内容，供"查看完整报告"折叠面板用 */
+  auditReportMd: string
+  /** 3 阶段反向验证（forward / reverse / reapply） */
+  reverseValidationPhases: Array<{
+    phase: 'forward' | 'reverse' | 'reapply'
+    passed: boolean | null
+    expected: 'pass' | 'fail' | 'skip'
+    exitCode: number | null
+    durationMs: number
+  }>
+  /** 0–1 之间的突变测试分数；框架不支持时为 null */
+  mutationScore: number | null
+  mutationSkipped: boolean
+  coverageDelta: { entries: unknown[]; toolDetected: boolean } | null
+  filesModified: string[]
+  startedAt: string
+  finishedAt: string
+  durationMs: number
+  /** fix.patch 文件原文（前端用纯文本 + 行染色渲染 diff） */
+  fixPatch: string
+  /** reproduction test 文件原文 */
+  reproductionTest: string
+  bugAnalysis: { symptom: string } | null
+}
+
+export interface MergeResult {
+  branch: string
+  commit: string
+  message: string
+  status: 'merged'
+  hint: string
 }
 
 export interface FeatureDetail extends Feature {
