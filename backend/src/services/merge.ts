@@ -26,6 +26,7 @@ import { BizError, Code } from '../lib/envelope.js'
 import { ArtifactService } from './artifact.js'
 import { assertWithinWorkspaceBase } from '../routes/workspaces.js'
 import { evaluateQueueForWorkspace } from './queue.js'
+import { sweepRebaseValidateForWorkspace } from './rebase-validate.js'
 
 // ============================================================================
 // Constants
@@ -460,68 +461,41 @@ async function finalizeMerge(
   // 1b. Implements: docs/prd/0001-bug-fix-workflow.md (Issue 05).
   // The merge releases this feature's locks, so any queued sibling in the
   // same workspace that no longer conflicts should auto-promote to 'active'.
-  try {
-    const [feat] = await db.select().from(features).where(eq(features.id, featureId))
-    if (feat) {
+  // 2. Implements: docs/prd/0001-bug-fix-workflow.md (Issue 06).
+  // Fire-and-forget the rebase-validate sweep: the new base for siblings is
+  // the TF1 commit on the merged branch — equivalent to the new main tip
+  // once the user fast-forwards main, so rebased siblings stay correct.
+  const [feat] = await db.select().from(features).where(eq(features.id, featureId))
+  if (feat) {
+    try {
       await evaluateQueueForWorkspace(feat.workspaceId)
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[merge] evaluateQueueForWorkspace failed:', err)
     }
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('[merge] evaluateQueueForWorkspace failed:', err)
-  }
 
-  // 2. Fire-and-forget: notify other in-flight features in the same workspace
-  //    that they should rebase. Issue 06 will implement the actual rebase
-  //    runner; we just call the seam so the trigger is in place.
-  try {
-    await notifyOtherFeaturesRebase(featureId, branch, commit)
-  } catch (err) {
-    // best-effort: never block the merge on the rebase signal.
-    // eslint-disable-next-line no-console
-    console.error('[merge] notifyOtherFeaturesRebase failed:', err)
+    try {
+      // Fire-and-forget. The sweep is idempotent (per-workspace) and
+      // best-effort — never block the merge on the rebase signal.
+      void sweepRebaseValidateForWorkspace({
+        workspaceId: feat.workspaceId,
+        mergedFeatureId: featureId,
+        newBase: branch,
+      })
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[merge] sweepRebaseValidateForWorkspace failed:', err)
+    }
   }
-  void message
 }
 
 /**
- * Seam for Issue 06: when a feature merges, every other in-flight feature
- * in the same workspace with intent=bug_fix should rebase onto the new main
- * tip and re-run the gatekeeper. The actual rebase lives in Issue 06; this
- * function is exported so the runner can wire it up. For now it is a stub
- * that surfaces a log line.
+ * Implements: docs/prd/0001-bug-fix-workflow.md (Issue 06).
  *
- * Fire-and-forget: errors are swallowed by the caller.
+ * The rebase-validate sweep is fired directly by finalizeMerge above
+ * (sweepRebaseValidateForWorkspace). The pre-Issue-06 seam function
+ * `notifyOtherFeaturesRebase` was a no-op stub and is now removed —
+ * callers that need to trigger the sweep should call
+ * `sweepRebaseValidateForWorkspace` directly, or `awaitRebaseValidateFor`
+ * to wait on an in-flight sweep.
  */
-export async function notifyOtherFeaturesRebase(
-  mergedFeatureId: string,
-  mergedBranch: string,
-  mergedCommit: string,
-): Promise<void> {
-  // Look up the workspaceId of the merged feature
-  const [feat] = await db.select().from(features).where(eq(features.id, mergedFeatureId))
-  if (!feat) return
-
-  // Find in-flight features in the same workspace with intent='bug_fix'
-  // and status not in ('done', 'merged', 'circuit_broken', 'upgraded').
-  // We just *list* them here; Issue 06 will iterate the rebase.
-  const inFlight = await db
-    .select()
-    .from(features)
-    .where(and(eq(features.workspaceId, feat.workspaceId), eq(features.intent, 'bug_fix')))
-
-  const targets = inFlight.filter((f) =>
-    f.id !== mergedFeatureId
-    && f.status !== 'done'
-    && f.status !== 'merged'
-    && f.status !== 'circuit_broken'
-    && f.status !== 'upgraded',
-  )
-
-  if (targets.length > 0) {
-    // eslint-disable-next-line no-console
-    console.log(
-      `[merge] rebase-validate signal: ${mergedFeatureId} merged @ ${mergedCommit} on ${mergedBranch}; ` +
-      `${targets.length} in-flight feature(s) eligible for rebase in workspace ${feat.workspaceId}`,
-    )
-  }
-}

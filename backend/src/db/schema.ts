@@ -24,7 +24,7 @@ export const features = sqliteTable('features', {
   currentStage: text('current_stage').notNull().default('spec'),
   currentWorkflowId: text('current_workflow_id').references((): SQLiteColumn => workflows.id, { onDelete: 'set null' }),
   currentNodeId: text('current_node_id').notNull().default('spec'),
-  status: text('status').notNull().default('active'), // active | done | paused
+  status: text('status').notNull().default('active'), // active | done | paused | queued | rebasing | merged | abandoned | circuit_broken | upgraded | approved
   // Implements: docs/prd/0001-bug-fix-workflow.md + CONTEXT.md decisions IW1 (24), CC1 (22)
   // intent: 标识 feature 的真实意图；空时按工作流推断。
   // lockedFiles: 由 bug-analyst 写入的疑似文件路径列表（JSON 数组）。

@@ -41,6 +41,7 @@ export type RejectionReason =
   | 'mutation_score_low'
   | 'test_passes_on_clean_tree'
   | 'coverage_regression'
+  | 'rebase_conflict'
 
 export const ALL_REJECTION_REASONS: RejectionReason[] = [
   'reverse_validation_failed',
@@ -50,6 +51,7 @@ export const ALL_REJECTION_REASONS: RejectionReason[] = [
   'mutation_score_low',
   'test_passes_on_clean_tree',
   'coverage_regression',
+  'rebase_conflict',
 ]
 
 export type PhaseName = 'forward' | 'reverse' | 'reapply' | 'full_suite' | 'scope' | 'mutation' | 'coverage'

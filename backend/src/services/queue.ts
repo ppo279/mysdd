@@ -24,7 +24,7 @@ import { db } from '../db/index.js'
 import { features, workflowNodes } from '../db/schema.js'
 
 /** Statuses that still hold a lock on the workspace's files. */
-export const IN_FLIGHT_STATUSES = ['active', 'paused', 'approved', 'queued'] as const
+export const IN_FLIGHT_STATUSES = ['active', 'paused', 'approved', 'queued', 'rebasing'] as const
 
 /** Statuses that release the lock and let queued siblings run. */
 export const LOCK_RELEASING_STATUSES = [
