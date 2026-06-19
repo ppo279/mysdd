@@ -33,9 +33,41 @@ import fs from 'fs'
 import os from 'os'
 import { BizError, Code } from '../lib/envelope.js'
 import { assertWithinWorkspaceBase } from '../routes/workspaces.js'
+import { ensureFeatureWorktree } from './worktree.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const STORAGE_ROOT = path.resolve(__dirname, '../../../storage')
+
+// Implements: docs/prd/0001-bug-fix-workflow.md (Issue 02)
+// Resolve the agent's effective cwd.
+//
+// Priority:
+//   1. per-node / per-agent explicit `cwd` (already asserted on by callers)
+//   2. bug_fix feature → per-feature worktree <localPath>/repo.worktrees/feat-<id>
+//      (created lazily on first dispatch; reused across retries)
+//   3. default <localPath>/repo
+//
+// Returns { cwd, worktree } so callers can surface the worktree path in logs.
+async function resolveEffectiveCwd(
+  feature: { id: string; intent: string },
+  localPath: string | undefined,
+  mergedCwd: string | undefined,
+): Promise<{ cwd: string | undefined; worktreePath?: string }> {
+  if (mergedCwd) {
+    // Per-node / per-agent override wins — but must already be guarded.
+    assertWithinWorkspaceBase(mergedCwd)
+    return { cwd: mergedCwd }
+  }
+  if (!localPath) return { cwd: undefined }
+  if (feature.intent === 'bug_fix') {
+    const wt = await ensureFeatureWorktree({
+      featureId: feature.id,
+      localPath,
+    })
+    return { cwd: wt.path, worktreePath: wt.path }
+  }
+  return { cwd: path.join(localPath, 'repo') }
+}
 
 // Implements: docs/adr/0001-workflow-execution-model.md (Phase 2)
 // 解析 effective SessionOptions：node.configJson > agent(YAML).config > 默认。
@@ -75,35 +107,31 @@ function mergeConfig(
  * 决定一次会话最终使用的 runtime id + session options。
  * - runtimeId:  per-node > per-agent > 默认 'claude'
  * - env/cwd/timeoutMs: per-node 字段优先；缺失则继承 per-agent
+ *
+ * Implements: docs/prd/0001-bug-fix-workflow.md (Issue 02)
+ * 当 feature.intent === 'bug_fix' 且无显式 cwd 覆盖时，cwd 改为 per-feature worktree。
+ * 这是异步的：先取 feature（确定 intent），再 resolve cwd。
  */
-function resolveSessionOptions(
+async function resolveSessionOptions(
+  feature: { id: string; intent: string },
   nodeConfigJson: string | null | undefined,
   agentId: string,
   localPath: string | undefined,
-): { runtimeId: string; options: SessionOptions } {
+): Promise<{ runtimeId: string; options: SessionOptions; worktreePath?: string }> {
   const perNode = parseJsonConfig(nodeConfigJson ?? '')
   const agent = getAgentConfig(agentId)
   const merged = mergeConfig(perNode, agent.config)
 
   const runtimeId = merged?.runtimeId ?? agent.runtime
 
-  const defaultCwd = localPath ? path.join(localPath, 'repo') : undefined
-  let cwd = merged?.cwd ?? defaultCwd
-  if (cwd) {
-    // Phase 2 守卫：per-node / per-agent 显式 cwd 不得逃出 WORKSPACE_BASE。
-    // 默认 cwd（localPath/repo）已经在 routes/workspaces.ts 的创建流程里保证
-    // localPath 自身在 WORKSPACE_BASE 内，故不必二次校验。
-    if (merged?.cwd) {
-      try {
-        assertWithinWorkspaceBase(cwd)
-      } catch (err) {
-        throw err
-      }
-    }
+  const { cwd, worktreePath } = await resolveEffectiveCwd(feature, localPath, merged?.cwd)
+  if (merged?.cwd) {
+    // Per-node / per-agent 显式 cwd 已在 resolveEffectiveCwd 守卫
   }
 
   return {
     runtimeId,
+    worktreePath,
     options: {
       env: merged?.env,
       cwd,
@@ -187,7 +215,8 @@ export class AgentService {
     // 解析 effective config: per-node > per-agent(YAML) > 默认。
     // 显式 cwd 已被 assertWithinWorkspaceBase 守卫；默认 cwd = <localPath>/repo
     // 由 routes/workspaces.ts 的创建流程保证 localPath 自身在 WORKSPACE_BASE 内。
-    const { runtimeId: effectiveRuntimeId, options: sessionOptions } = resolveSessionOptions(
+    const { runtimeId: effectiveRuntimeId, options: sessionOptions } = await resolveSessionOptions(
+      feature,
       node.configJson,
       agent.id,
       localPath,
@@ -349,7 +378,10 @@ export class AgentService {
 
     // Phase 2: resume 也走 resolveSessionOptions，让 per-node / per-agent config
     // 在同一会话中保持一致（避免 start 时 cwd=A、resume 时 cwd=B）
-    const { runtimeId: effectiveRuntimeId, options: sessionOptions } = resolveSessionOptions(
+    // Issue 02: feature 必须传进来以决定 worktree cwd
+    const resumeFeature = feature ? { id: feature.id, intent: feature.intent } : { id: run.featureId, intent: 'new_feature' }
+    const { runtimeId: effectiveRuntimeId, options: sessionOptions } = await resolveSessionOptions(
+      resumeFeature,
       effectiveNodeConfigJson,
       effectiveAgentId ?? run.stage,
       localPath,

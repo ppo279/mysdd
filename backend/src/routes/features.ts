@@ -21,6 +21,7 @@ import { toposort } from '../services/workflow.js'
 import { ArtifactService } from '../services/artifact.js'
 import { BizError, Code, ok } from '../lib/envelope.js'
 import { createSyntheticIntakeRun, parseWorkflowInputs } from '../services/intake.js'
+import { removeFeatureWorktree } from '../services/worktree.js'
 
 // Implements: docs/prd/0001-bug-fix-workflow.md (Issue 01)
 const FeatureIntentSchema = z.enum(['bug_fix', 'spec_change', 'new_feature', 'refactor'])
@@ -282,6 +283,15 @@ export async function featureRoutes(app: FastifyInstance) {
     // feature_node_states / feature_node_migrations 有 CASCADE from features，但仍显式删保证确定性
     await db.delete(featureNodeStates).where(eq(featureNodeStates.featureId, featureId))
     await db.delete(featureNodeMigrations).where(eq(featureNodeMigrations.featureId, featureId))
+
+    // Implements: docs/prd/0001-bug-fix-workflow.md (Issue 02)
+    // 若 feature 是 bug_fix 且已分配 worktree，删除时清理 worktree 目录与 git worktree 登记
+    if (feature.intent === 'bug_fix') {
+      const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, feature.workspaceId))
+      if (ws?.localPath) {
+        try { await removeFeatureWorktree(ws.localPath, featureId) } catch { /* best-effort */ }
+      }
+    }
 
     // 删除磁盘上的产物目录 storage/<workspaceId>/<featureId>/
     // 利用 getArtifactPath 拼到上一级；为避免引入假参数，直接用 path.dirname
