@@ -58,7 +58,10 @@ export const SCHEMA_SQL = `
       artifact_content TEXT NOT NULL DEFAULT '',
       artifact_path TEXT NOT NULL DEFAULT '',
       created_at INTEGER NOT NULL,
-      approved_at INTEGER
+      approved_at INTEGER,
+      attempt INTEGER NOT NULL DEFAULT 1,
+      parent_stage_run_id TEXT,
+      rejection_reason TEXT
     );
 
     CREATE TABLE IF NOT EXISTS messages (
@@ -77,6 +80,7 @@ export const SCHEMA_SQL = `
       is_archived INTEGER NOT NULL DEFAULT 0,
       inputs_json TEXT NOT NULL DEFAULT '[]',
       rejection_edges_json TEXT NOT NULL DEFAULT '[]',
+      settings_json TEXT NOT NULL DEFAULT '{}',
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
@@ -154,6 +158,10 @@ export function initDb() {
   try { sqlite.exec(`ALTER TABLE features ADD COLUMN locked_files TEXT`) } catch { /* already exists */ }
   try { sqlite.exec(`ALTER TABLE features ADD COLUMN looks_like TEXT`) } catch { /* already exists */ }
   try { sqlite.exec(`ALTER TABLE stage_runs ADD COLUMN node_id TEXT`) } catch { /* already exists */ }
+  try { sqlite.exec(`ALTER TABLE stage_runs ADD COLUMN attempt INTEGER NOT NULL DEFAULT 1`) } catch { /* already exists */ }
+  try { sqlite.exec(`ALTER TABLE stage_runs ADD COLUMN parent_stage_run_id TEXT`) } catch { /* already exists */ }
+  try { sqlite.exec(`ALTER TABLE stage_runs ADD COLUMN rejection_reason TEXT`) } catch { /* already exists */ }
   try { sqlite.exec(`ALTER TABLE workflows ADD COLUMN inputs_json TEXT NOT NULL DEFAULT '[]'`) } catch { /* already exists */ }
   try { sqlite.exec(`ALTER TABLE workflows ADD COLUMN rejection_edges_json TEXT NOT NULL DEFAULT '[]'`) } catch { /* already exists */ }
+  try { sqlite.exec(`ALTER TABLE workflows ADD COLUMN settings_json TEXT NOT NULL DEFAULT '{}'`) } catch { /* already exists */ }
 }

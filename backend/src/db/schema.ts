@@ -38,6 +38,10 @@ export const features = sqliteTable('features', {
 // 每个阶段的一次运行
 // stage 字段保留：当前约定为 agent id（来自 workflow_nodes.agentId），
 // Phase 0 起新增 nodeId 字段：workflow-scoped 节点 id，调度与产物路径都基于它。
+// Implements: docs/prd/0001-bug-fix-workflow.md (Issue 03) + CONTEXT.md decision 18 (RT1)
+// - attempt: 同一 nodeId 的第几次执行；1 = 首次；2+ = 重试。
+// - parentStageRunId: 自 FK → stage_runs.id。本 run 是它的直接后继；重试链查询用。
+// - rejectionReason: 当 status='rejected' 时记录拒绝原因（来自 quality-gatekeeper 的 7-reason 枚举）。
 export const stageRuns = sqliteTable('stage_runs', {
   id: text('id').primaryKey(),
   featureId: text('feature_id').notNull().references(() => features.id),
@@ -50,6 +54,9 @@ export const stageRuns = sqliteTable('stage_runs', {
   artifactPath: text('artifact_path').notNull().default(''),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
   approvedAt: integer('approved_at', { mode: 'timestamp' }),
+  attempt: integer('attempt').notNull().default(1),
+  parentStageRunId: text('parent_stage_run_id'),
+  rejectionReason: text('rejection_reason'),
 })
 
 export const messages = sqliteTable('messages', {
@@ -73,8 +80,11 @@ export const workflows = sqliteTable('workflows', {
   //   形状：[ { name: 'bug_report', type: 'file', description: '...', required: true } ]
   // rejectionEdgesJson: 质量门神拒绝时回退到上游节点的边。
   //   形状：[ { from, trigger, to, action, consumesRepairBudget } ]
+  // settingsJson: 工作流级配置（如 total_repair_budget），用于运行时的修复预算等。
+  //   形状：自由 KV，目前使用 total_repair_budget。
   inputsJson: text('inputs_json').notNull().default('[]'),
   rejectionEdgesJson: text('rejection_edges_json').notNull().default('[]'),
+  settingsJson: text('settings_json').notNull().default('{}'),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
 })

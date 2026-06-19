@@ -147,6 +147,13 @@ rejection_edges:
     action: re_analyze
     consumes_repair_budget: true
 
+  # Coverage dropped on files the fix touched → fix is hollow
+  - from: audit
+    trigger: rejection.reason == "coverage_regression"
+    to: fix
+    action: reject_fix
+    consumes_repair_budget: true
+
 # Terminal outputs (what the workflow returns to the caller on success)
 outputs:
   - name: approved_fix

@@ -76,6 +76,7 @@ export async function seedBugFixWorkflow(workspaceId: string): Promise<SeedWorkf
     isArchived: 0,
     inputsJson: JSON.stringify(wfYaml.inputs),
     rejectionEdgesJson: JSON.stringify(wfYaml.rejection_edges),
+    settingsJson: JSON.stringify(wfYaml.settings ?? {}),
     createdAt: now,
     updatedAt: now,
   })

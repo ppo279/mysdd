@@ -34,6 +34,7 @@ import os from 'os'
 import { BizError, Code } from '../lib/envelope.js'
 import { assertWithinWorkspaceBase } from '../routes/workspaces.js'
 import { ensureFeatureWorktree } from './worktree.js'
+import { runGatekeeper } from './gatekeeper.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const STORAGE_ROOT = path.resolve(__dirname, '../../../storage')
@@ -499,6 +500,32 @@ export class AgentService {
     // 把 bug_analysis.json 的 looks_like + suspected_files[*].path 写入 features。
     // 解析失败时静默跳过——不影响 approve 主流程，留待后续 issue 引入结构化校验。
     await this.tryClaimBugAnalysisLocks(featureId, run.nodeId, outputs)
+
+    // Implements: docs/prd/0001-bug-fix-workflow.md (Issue 03)
+    // 当 feature 是 bug_fix 且刚刚审批通过的是 code-surgeon (nodeId='fix')，
+    // 自动调用 quality-gatekeeper 的反向验证 runner。Runner 的 verdict 决定
+    // 是 cascade 上游节点（拒绝）还是等待用户合并（通过）。
+    // 任何 runner 异常都不影响 approve 主流程——避免一个工作流引擎 bug 阻塞审批。
+    if (run.nodeId === 'fix') {
+      try {
+        const [featRow] = await db.select().from(features).where(eq(features.id, featureId))
+        if (featRow?.intent === 'bug_fix') {
+          const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId))
+          if (ws?.localPath) {
+            const wt = await ensureFeatureWorktree({ featureId, localPath: ws.localPath })
+            await runGatekeeper({
+              featureId,
+              fixStageRunId: stageRunId,
+              featureWorktreePath: wt.path,
+            })
+          }
+        }
+      } catch (err) {
+        // best-effort: log but don't fail approve
+        // eslint-disable-next-line no-console
+        console.error('[gatekeeper] auto-invocation failed:', err)
+      }
+    }
 
     return { nodeId: run.nodeId, outputNames }
   }
