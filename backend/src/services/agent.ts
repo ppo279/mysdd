@@ -16,6 +16,7 @@ import {
   featureNodeStates,
 } from '../db/schema.js'
 import { getRuntime } from '../runtime/registry.js'
+import { isReservedNodeId } from './workflow.js'
 import {
   buildSystemPrompt,
   buildEdgeBasedContext,
@@ -262,7 +263,11 @@ export class AgentService {
     const out: Array<{ fromNodeId: string; agentId: string; fromOutput: string; toInput: string; content: string }> = []
     for (const e of incoming) {
       const upstreamNode = nodes.find((n) => n.nodeId === e.fromNodeId)
-      if (!upstreamNode) continue
+      // Implements: docs/prd/0001-bug-fix-workflow.md (CONTEXT.md decision 15 / BI1)
+      // 虚拟 __intake__ 节点没有 workflow_nodes 行；它通过 SyntheticIntakeRun 注入，
+      // 这里把 agentId 标记为 'intake' 让 buildEdgeBasedContext 仍能渲染标题。
+      const agentId: string = upstreamNode?.agentId ?? (isReservedNodeId(e.fromNodeId) ? e.fromNodeId : '')
+      if (!upstreamNode && !isReservedNodeId(e.fromNodeId)) continue
       // 找该 node 最近一条 approved stageRun
       const runs = await db
         .select()
@@ -277,7 +282,7 @@ export class AgentService {
       if (!output) continue
       out.push({
         fromNodeId: e.fromNodeId,
-        agentId: upstreamNode.agentId,
+        agentId,
         fromOutput: e.fromOutput,
         toInput: e.toInput,
         content: output.content,
@@ -449,7 +454,60 @@ export class AgentService {
     // 标记 node 状态为 approved
     await this.upsertNodeState(featureId, run.nodeId, 'approved', stageRunId)
 
+    // Implements: docs/prd/0001-bug-fix-workflow.md (Issue 01)
+    // bug-analyst（nodeId='analyze'，feature.intent='bug_fix'）审批完成后，
+    // 把 bug_analysis.json 的 looks_like + suspected_files[*].path 写入 features。
+    // 解析失败时静默跳过——不影响 approve 主流程，留待后续 issue 引入结构化校验。
+    await this.tryClaimBugAnalysisLocks(featureId, run.nodeId, outputs)
+
     return { nodeId: run.nodeId, outputNames }
+  }
+
+  /**
+   * Implements: docs/prd/0001-bug-fix-workflow.md (Issue 01 / CONTEXT.md CC1)
+   * 仅在 feature.intent='bug_fix' 且 nodeId='analyze' 时触发。
+   * 把 bug_analysis.json 的 looks_like 与 suspected_files[*].path 写入 features 行。
+   */
+  private static async tryClaimBugAnalysisLocks(
+    featureId: string,
+    nodeId: string,
+    outputs: Record<string, string>,
+  ): Promise<void> {
+    const [feature] = await db.select().from(features).where(eq(features.id, featureId))
+    if (!feature || feature.intent !== 'bug_fix' || nodeId !== 'analyze') return
+
+    const raw = outputs['bug_analysis.json']
+    if (!raw) return
+
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(raw)
+    } catch {
+      return
+    }
+    if (!parsed || typeof parsed !== 'object') return
+    const obj = parsed as Record<string, unknown>
+
+    const looksLike = typeof obj.looks_like === 'string'
+      ? obj.looks_like as 'true_bug' | 'spec_gap' | 'missing_feature' | 'design_flaw'
+      : null
+
+    const paths: string[] = []
+    if (Array.isArray(obj.suspected_files)) {
+      for (const f of obj.suspected_files) {
+        if (f && typeof f === 'object' && typeof (f as Record<string, unknown>).path === 'string') {
+          const p = ((f as Record<string, unknown>).path as string).trim()
+          if (p) paths.push(p)
+        }
+      }
+    }
+
+    const patch: Record<string, unknown> = {}
+    if (looksLike) patch.looksLike = looksLike
+    if (paths.length > 0) patch.lockedFiles = JSON.stringify(paths)
+    if (Object.keys(patch).length > 0) {
+      await db.update(features).set(patch as any).where(eq(features.id, featureId))
+    }
   }
 
   // 获取 stageRun 的全部消息

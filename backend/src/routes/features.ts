@@ -5,6 +5,7 @@ import {
   stageRuns,
   messages,
   workspaces,
+  workflows,
   workflowNodes,
   workflowEdges,
   featureNodeStates,
@@ -19,10 +20,17 @@ import path from 'path'
 import { toposort } from '../services/workflow.js'
 import { ArtifactService } from '../services/artifact.js'
 import { BizError, Code, ok } from '../lib/envelope.js'
+import { createSyntheticIntakeRun, parseWorkflowInputs } from '../services/intake.js'
+
+// Implements: docs/prd/0001-bug-fix-workflow.md (Issue 01)
+const FeatureIntentSchema = z.enum(['bug_fix', 'spec_change', 'new_feature', 'refactor'])
 
 const CreateFeatureSchema = z.object({
   name: z.string().min(1),
   description: z.string().default(''),
+  intent: FeatureIntentSchema.optional(),
+  workflowId: z.string().min(1).optional(),
+  inputs: z.record(z.string(), z.string()).optional(),
 })
 
 export async function featureRoutes(app: FastifyInstance) {
@@ -41,13 +49,40 @@ export async function featureRoutes(app: FastifyInstance) {
   // Implements: docs/adr/0001-workflow-execution-model.md (Phase 0)
   // - 从 workspaces.default_workflow_id 取当前 workflow
   // - 用 toposort 的第一个 nodeId 作为 current_node_id
+  // Implements: docs/prd/0001-bug-fix-workflow.md (Issue 01)
+  // - 接受 intent / workflowId / inputs
+  // - intent=bug_fix 且未给 workflowId 时，选 workspace library 中声明了 bug_report input 的工作流
+  // - 选完后创建合成 __intake__ stage_run + 写磁盘 side outputs
   app.post('/api/workspaces/:workspaceId/features', async (req, reply) => {
     const { workspaceId } = req.params as { workspaceId: string }
     const body = CreateFeatureSchema.parse(req.body)
 
     const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId))
     if (!ws) throw new BizError(Code.WORKSPACE_NOT_FOUND, 'Workspace not found', 404)
-    if (!ws.defaultWorkflowId) {
+
+    // 决定 workflowId：显式 > bug_fix 路由 > workspace default
+    let workflowId: string | null = null
+    if (body.workflowId) {
+      const [wf] = await db.select().from(workflows).where(eq(workflows.id, body.workflowId))
+      if (!wf || wf.workspaceId !== workspaceId) {
+        throw new BizError(Code.WORKFLOW_INVALID, `workflowId "${body.workflowId}" does not belong to workspace ${workspaceId}`, 400)
+      }
+      workflowId = wf.id
+    } else if (body.intent === 'bug_fix') {
+      const libWorkflows = await db.select().from(workflows).where(eq(workflows.workspaceId, workspaceId))
+      const bugFix = libWorkflows.find((w) => !w.isArchived && parseWorkflowInputs(w.inputsJson).some((i) => i.name === 'bug_report'))
+      if (!bugFix) {
+        throw new BizError(
+          Code.WORKFLOW_NOT_FOUND,
+          `No bug-fix workflow found in workspace ${workspaceId}`,
+          400,
+        )
+      }
+      workflowId = bugFix.id
+    } else {
+      workflowId = ws.defaultWorkflowId
+    }
+    if (!workflowId) {
       throw new BizError(
         Code.WORKFLOW_NOT_FOUND,
         `Workspace ${workspaceId} has no default workflow`,
@@ -59,28 +94,52 @@ export async function featureRoutes(app: FastifyInstance) {
     const nodes = await db
       .select()
       .from(workflowNodes)
-      .where(eq(workflowNodes.workflowId, ws.defaultWorkflowId))
+      .where(eq(workflowNodes.workflowId, workflowId))
     const edges = await db
       .select()
       .from(workflowEdges)
-      .where(eq(workflowEdges.workflowId, ws.defaultWorkflowId))
+      .where(eq(workflowEdges.workflowId, workflowId))
     const order = toposort({ nodes, edges })
     if (order.length === 0) {
-      throw new BizError(Code.WORKFLOW_INVALID, `Workspace default workflow has no nodes`, 400)
+      throw new BizError(Code.WORKFLOW_INVALID, `Workflow ${workflowId} has no nodes`, 400)
     }
+
+    // 取 workflow 行一次：用于推导 intent 与 pre-validate intake inputs
+    const [wfRow] = await db.select().from(workflows).where(eq(workflows.id, workflowId))
+    const declaredInputs = parseWorkflowInputs(wfRow?.inputsJson)
+    const missing = declaredInputs.filter((i) => i.required && !(body.inputs?.[i.name]))
+    if (missing.length > 0) {
+      throw new BizError(
+        Code.MISSING_CONFIRM,
+        `Workflow requires inputs: ${missing.map((m) => m.name).join(', ')}`,
+        400,
+      )
+    }
+
+    // 推导 intent：显式给则用；否则按 workflow 是否声明了 bug_report 推断
+    const inferredFromBugIntake = declaredInputs.some((i) => i.name === 'bug_report')
+    const intent: 'bug_fix' | 'spec_change' | 'new_feature' | 'refactor' =
+      body.intent ?? (inferredFromBugIntake ? 'bug_fix' : 'new_feature')
 
     const feature = {
       id: randomUUID(),
       workspaceId,
       name: body.name,
       description: body.description,
-      currentStage: order[0],  // 兼容旧字段：用首个 nodeId（不一定 === agentId）
-      currentWorkflowId: ws.defaultWorkflowId,
+      currentStage: order[0],
+      currentWorkflowId: workflowId,
       currentNodeId: order[0],
       status: 'active',
+      intent,
+      lockedFiles: null,
+      looksLike: null,
       createdAt: new Date(),
     }
     await db.insert(features).values(feature)
+
+    // 创建合成 __intake__ stage_run（若 workflow 声明了 inputs 且用户提供了对应 content）
+    await createSyntheticIntakeRun(feature.id, workspaceId, body.inputs ?? {})
+
     return ok(reply, feature, 201)
   })
 

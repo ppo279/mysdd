@@ -16,11 +16,25 @@ const message = useMessage()
 const detail = ref<WorkspaceDetail | null>(null)
 const showCreate = ref(false)
 const creating = ref(false)
-const newFeature = ref({ name: '', description: '' })
+// Implements: docs/prd/0001-bug-fix-workflow.md (Issue 01)
+// intent + workflow-level inputs (bug_report) 一并提交。
+const newFeature = ref({
+  name: '',
+  description: '',
+  intent: 'new_feature' as 'bug_fix' | 'spec_change' | 'new_feature' | 'refactor',
+  bugReport: '',
+})
 const taskModeOptions = [
   { label: '从零开始设计并实现', value: '从零开始设计并实现' },
   { label: '在原有代码基础上修改', value: '在原有代码基础上修改' },
   { label: '仅生成文档 / 分析', value: '仅生成文档 / 分析' },
+]
+// Implements: docs/prd/0001-bug-fix-workflow.md (Issue 01)
+const intentOptions = [
+  { label: 'Bug 修复（4 步反向流水线）', value: 'bug_fix' as const },
+  { label: '规范变更（升格到正向 SDD）', value: 'spec_change' as const },
+  { label: '新增功能（默认正向 SDD）', value: 'new_feature' as const },
+  { label: '重构（占位）', value: 'refactor' as const },
 ]
 const deletingId = ref<string | null>(null)
 
@@ -110,12 +124,29 @@ onMounted(async () => {
 
 async function handleCreateFeature() {
   if (!newFeature.value.name.trim() || !detail.value) return
+  if (newFeature.value.intent === 'bug_fix' && !newFeature.value.bugReport.trim()) {
+    message.warning('Bug 修复需要填写 bug_report（自然语言描述）')
+    return
+  }
   creating.value = true
   try {
-    const feature = await api.features.create(workspaceId, newFeature.value)
+    const payload: Parameters<typeof api.features.create>[1] = {
+      name: newFeature.value.name,
+      description: newFeature.value.description,
+      intent: newFeature.value.intent,
+    }
+    if (newFeature.value.intent === 'bug_fix') {
+      payload.inputs = { bug_report: newFeature.value.bugReport }
+    }
+    const feature = await api.features.create(workspaceId, payload)
     detail.value.features.push(feature)
     showCreate.value = false
-    newFeature.value = { name: '', description: '' }
+    newFeature.value = {
+      name: '',
+      description: '',
+      intent: 'new_feature',
+      bugReport: '',
+    }
     router.push(`/workspace/${workspaceId}/feature/${feature.id}`)
   } catch (e: any) {
     message.error(e.message)
@@ -248,11 +279,31 @@ defineExpose({
   </NLayout>
 
   <NModal v-model:show="showCreate">
-    <NCard title="新建 Feature" closable style="width:460px;background:#fff;"
+    <NCard title="新建 Feature" closable style="width:560px;background:#fff;"
       @close="showCreate = false">
       <NForm label-placement="top" :show-feedback="false">
         <NFormItem label="Feature 名称 *">
           <NInput v-model:value="newFeature.name" placeholder="如：用户注册功能" />
+        </NFormItem>
+        <!-- Implements: docs/prd/0001-bug-fix-workflow.md (Issue 01) -->
+        <NFormItem label="意图（Intent）">
+          <NSelect
+            v-model:value="newFeature.intent"
+            :options="intentOptions"
+            placeholder="请选择意图"
+            style="width:100%"
+          />
+        </NFormItem>
+        <NFormItem
+          v-if="newFeature.intent === 'bug_fix'"
+          label="Bug Report（自然语言描述）*"
+        >
+          <NInput
+            v-model:value="newFeature.bugReport"
+            type="textarea"
+            :autosize="{ minRows: 5, maxRows: 10 }"
+            placeholder="描述 bug 的现象、复现步骤、期望与实际行为、错误信息等"
+          />
         </NFormItem>
         <NFormItem label="任务模式">
           <NSelect

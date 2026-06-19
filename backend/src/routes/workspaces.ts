@@ -12,6 +12,7 @@ import { spawn } from 'child_process'
 import { BizError, Code, ok } from '../lib/envelope.js'
 import { sseHeaders, sseWrite, writeSseError } from '../lib/sse.js'
 import { createInitialWorkflow } from '../services/workflow-bootstrap.js'
+import { seedBugFixWorkflow } from '../services/workflow-seed.js'
 
 // Cross-platform workspace root: ~/sdd-workspaces/ (C:\Users\...\sdd-workspaces on Windows)
 export const WORKSPACE_BASE = path.join(os.homedir(), 'sdd-workspaces')
@@ -158,6 +159,9 @@ export async function workspaceRoutes(app: FastifyInstance) {
       // 种子"默认工作流"：从 agents.yaml 读出 agent 列表，插入 1 个 workflows + N 个 workflow_nodes + (N-1) 个串联的 workflow_edges
       // 设回 workspaces.default_workflow_id。失败时回滚（workflow 表上没有 CASCADE 到 workspace，所以这里顺序很重要）
       await createInitialWorkflow(id)
+      // Implements: docs/prd/0001-bug-fix-workflow.md (Issue 01)
+      // 种子 bug-fix workflow 到 workspace library；幂等，缺少 agent 不阻断
+      await seedBugFixWorkflow(id)
     } catch (err) {
       // 任一失败：回滚 DB 行 + 清理本地目录
       try { await db.delete(workspaces).where(eq(workspaces.id, id)) } catch { /* best-effort */ }

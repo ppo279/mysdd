@@ -97,6 +97,27 @@ function dfs(
   return null
 }
 
+/** Implements: docs/prd/0001-bug-fix-workflow.md + CONTEXT.md decision 15 (BI1)
+ * 工作流保留节点 id：用于虚拟节点，无需 workflow_nodes 行。
+ *  __intake__ —— 接收工作流级 inputs（side outputs 来自用户/上游）
+ *  __terminal__ —— 工作流终点，不接受边指向它后做任何事
+ *  调用方在 toposort 之前应把这些保留节点从 graph.nodes 中过滤掉，否则会出现在顺序里。
+ */
+export const RESERVED_NODE_IDS = ['__intake__', '__terminal__'] as const
+export type ReservedNodeId = (typeof RESERVED_NODE_IDS)[number]
+
+export function isReservedNodeId(id: string): id is ReservedNodeId {
+  return (RESERVED_NODE_IDS as readonly string[]).includes(id)
+}
+
+/** 从图中剥离保留节点（虚拟节点不参与 toposort）。 */
+export function stripReservedNodes(graph: WorkflowGraph): WorkflowGraph {
+  return {
+    nodes: graph.nodes.filter((n) => !isReservedNodeId(n.nodeId)),
+    edges: graph.edges.filter((e) => !isReservedNodeId(e.fromNodeId) && !isReservedNodeId(e.toNodeId)),
+  }
+}
+
 /**
  * 拓扑排序：返回节点 nodeId 数组。
  * 顺序：若 DAG 有唯一排序，按之；否则按"入度消除"算法，tie-break 用入边 fromNodeId 字典序。
@@ -158,17 +179,17 @@ export function toposort(graph: WorkflowGraph): string[] {
  *  - 所有 agentId 在 agents.yaml 中存在
  *  - 所有边引用的 fromNodeId / toNodeId 必须存在
  *  - 无环
+ * Implements: docs/prd/0001-bug-fix-workflow.md
+ * CONTEXT.md decision 9 (N2) 允许 workflow-scoped nodeId 与 agentId 不同
+ * （bug-fix workflow 用 analyze/design-test/fix/audit，agent 是 bug-analyst/test-architect/code-surgeon/quality-gatekeeper）。
+ * 因此取消 "nodeId === agentId" 的强制约束；保留 agentId 在 agents.yaml 中存在的校验。
  */
 export function validateWorkflow(graph: WorkflowGraph): void {
   if (graph.nodes.length === 0) {
     throw new BizError(Code.WORKFLOW_INVALID, 'Workflow must have at least one node', 400)
   }
 
-  // Pass 1：结构性唯一性（nodeId / agentId 各扫一遍）——这两个错误码分治互斥的子集：
-  //   - NODE_ID_CONFLICT：两个节点共享 nodeId
-  //   - AGENT_ID_CONFLICT：两个节点共享 agentId 但 nodeId 不同（路线 1 下不会被 NODE_ID_MISMATCH 抢先）
   const seen = new Set<string>()
-  const agentSeen = new Set<string>()
   for (const n of graph.nodes) {
     if (seen.has(n.nodeId)) {
       throw new BizError(
@@ -178,25 +199,9 @@ export function validateWorkflow(graph: WorkflowGraph): void {
       )
     }
     seen.add(n.nodeId)
-    if (agentSeen.has(n.agentId)) {
-      throw new BizError(
-        Code.AGENT_ID_CONFLICT,
-        `Duplicate agentId in workflow: "${n.agentId}"`,
-        400,
-      )
-    }
-    agentSeen.add(n.agentId)
   }
 
-  // Pass 2：语义校验（nodeId === agentId + agent 在 agents.yaml 里）
   for (const n of graph.nodes) {
-    if (n.nodeId !== n.agentId) {
-      throw new BizError(
-        Code.NODE_ID_MISMATCH,
-        `Node id "${n.nodeId}" does not match agent id "${n.agentId}" (Route 1 requires they be identical)`,
-        400,
-      )
-    }
     try {
       getAgentConfig(n.agentId)
     } catch {
@@ -209,14 +214,14 @@ export function validateWorkflow(graph: WorkflowGraph): void {
   }
 
   for (const e of graph.edges) {
-    if (!seen.has(e.fromNodeId)) {
+    if (!seen.has(e.fromNodeId) && !isReservedNodeId(e.fromNodeId)) {
       throw new BizError(
         Code.WORKFLOW_INVALID,
         `Edge references unknown fromNodeId: "${e.fromNodeId}"`,
         400,
       )
     }
-    if (!seen.has(e.toNodeId)) {
+    if (!seen.has(e.toNodeId) && !isReservedNodeId(e.toNodeId)) {
       throw new BizError(
         Code.WORKFLOW_INVALID,
         `Edge references unknown toNodeId: "${e.toNodeId}"`,

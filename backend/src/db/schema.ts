@@ -25,6 +25,13 @@ export const features = sqliteTable('features', {
   currentWorkflowId: text('current_workflow_id').references((): SQLiteColumn => workflows.id, { onDelete: 'set null' }),
   currentNodeId: text('current_node_id').notNull().default('spec'),
   status: text('status').notNull().default('active'), // active | done | paused
+  // Implements: docs/prd/0001-bug-fix-workflow.md + CONTEXT.md decisions IW1 (24), CC1 (22)
+  // intent: 标识 feature 的真实意图；空时按工作流推断。
+  // lockedFiles: 由 bug-analyst 写入的疑似文件路径列表（JSON 数组）。
+  // looksLike: bug 分析判定（true_bug | spec_gap | missing_feature | design_flaw）。
+  intent: text('intent').notNull().default('new_feature'),
+  lockedFiles: text('locked_files'),
+  looksLike: text('looks_like'),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
 })
 
@@ -61,6 +68,13 @@ export const workflows = sqliteTable('workflows', {
   name: text('name').notNull(),
   description: text('description').notNull().default(''),
   isArchived: integer('is_archived').notNull().default(0),
+  // Implements: docs/prd/0001-bug-fix-workflow.md
+  // inputsJson: 工作流级输入（如 bug_report），用于生成虚拟 __intake__ 节点。
+  //   形状：[ { name: 'bug_report', type: 'file', description: '...', required: true } ]
+  // rejectionEdgesJson: 质量门神拒绝时回退到上游节点的边。
+  //   形状：[ { from, trigger, to, action, consumesRepairBudget } ]
+  inputsJson: text('inputs_json').notNull().default('[]'),
+  rejectionEdgesJson: text('rejection_edges_json').notNull().default('[]'),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
 })

@@ -104,7 +104,16 @@ export const api = {
   features: {
     list: (workspaceId: string) =>
       request<Feature[]>(`/api/workspaces/${workspaceId}/features`),
-    create: (workspaceId: string, data: { name: string; description: string }) =>
+    create: (
+      workspaceId: string,
+      data: {
+        name: string
+        description?: string
+        intent?: 'bug_fix' | 'spec_change' | 'new_feature' | 'refactor'
+        workflowId?: string
+        inputs?: Record<string, string>
+      },
+    ) =>
       request<Feature>(`/api/workspaces/${workspaceId}/features`, {
         method: 'POST',
         body: JSON.stringify(data),
@@ -369,6 +378,10 @@ export interface Feature {
   currentWorkflowId: string | null
   currentNodeId: string
   status: string
+  // Implements: docs/prd/0001-bug-fix-workflow.md (Issue 01 / CONTEXT.md IW1)
+  intent: 'bug_fix' | 'spec_change' | 'new_feature' | 'refactor'
+  lockedFiles: string[] | null
+  looksLike: 'true_bug' | 'spec_gap' | 'missing_feature' | 'design_flaw' | null
   createdAt: string
 }
 

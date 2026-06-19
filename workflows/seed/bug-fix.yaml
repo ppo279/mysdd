@@ -1,0 +1,160 @@
+# Bug-Fix Workflow (TDD-Driven)
+# See: docs/adr/0001-bug-fix-workflow.md
+# Topology: bug-analyst → test-architect → code-surgeon → quality-gatekeeper
+# Rejection paths: quality-gatekeeper can loop back to any upstream node.
+
+id: bug-fix
+name: Bug Fix (TDD-Driven)
+version: 1.0.0
+description: |
+  4-agent reverse pipeline that operationalizes AGENTS.md v3.2 §4 TDD discipline
+  for bug fixes. Tests are constructed BEFORE source changes, and the final
+  quality-gatekeeper performs a reverse validation to prove the test actually
+  captures the bug.
+
+# Top-level inputs that the workflow itself requires (vs. per-node inputs)
+inputs:
+  - name: bug_report
+    type: file
+    description: User's natural-language bug report (markdown or text)
+    required: true
+
+# Per-workflow settings
+settings:
+  total_repair_budget: 3           # Total loop-backs allowed across the whole pipeline
+  test_framework: auto-detect      # Let test-architect determine from repo
+  require_reverse_validation: true # Hard requirement; no skip
+  mutation_testing: best-effort    # Run if framework supports, warn if not
+
+# Node instances. The same agentId can appear at most once unless
+# the workflow explicitly calls for multiple instances (none here).
+nodes:
+  - nodeId: analyze
+    agentId: bug-analyst
+    description: Structure the bug report into a localization report
+    repair_budget: 1
+
+  - nodeId: design-test
+    agentId: test-architect
+    description: Write a deterministic failing test that reproduces the bug
+    repair_budget: 2
+
+  - nodeId: fix
+    agentId: code-surgeon
+    description: Apply minimal source change to make the failing test pass
+    repair_budget: 3
+
+  - nodeId: audit
+    agentId: quality-gatekeeper
+    description: Verify the fix is real, the test is real, nothing else broke
+    repair_budget: 0   # Gatekeeper does not iterate; it rejects and upstream retries
+
+# Forward edges
+edges:
+  # Top-level intake → bug-analyst
+  - from: __intake__
+    fromOutput: bug_report
+    to: analyze
+    toInput: bug_report
+
+  # bug-analyst → test-architect
+  - from: analyze
+    fromOutput: bug_analysis.json
+    to: design-test
+    toInput: bug_analysis.json
+
+  - from: analyze
+    fromOutput: bug_analysis.md
+    to: design-test
+    toInput: bug_analysis.md
+
+  - from: __intake__
+    fromOutput: bug_report
+    to: design-test
+    toInput: bug_report
+
+  # test-architect → code-surgeon
+  - from: design-test
+    fromOutput: reproduction_test
+    to: fix
+    toInput: reproduction_test
+
+  - from: design-test
+    fromOutput: reproduction_test.log
+    to: fix
+    toInput: reproduction_test.log
+
+  # code-surgeon → quality-gatekeeper
+  - from: fix
+    fromOutput: fix.patch
+    to: audit
+    toInput: fix.patch
+
+  - from: fix
+    fromOutput: full_test_suite.log
+    to: audit
+    toInput: full_test_suite.log
+
+  # quality-gatekeeper → terminal
+  - from: audit
+    fromOutput: audit_report.md
+    to: __terminal__
+    toInput: approved_fix
+
+# Rejection edges (loop-backs, executed by workflow engine on rejection).
+# These are NOT part of the happy path; they execute when the gatekeeper
+# emits a rejection verdict with a specific target.
+rejection_edges:
+  # Reverse validation failed → test is weak
+  - from: audit
+    trigger: rejection.reason == "reverse_validation_failed"
+    to: design-test
+    action: replace_reproduction_test
+    consumes_repair_budget: true
+
+  # Mutation score too low → assertion too weak
+  - from: audit
+    trigger: rejection.reason == "mutation_score_low"
+    to: design-test
+    action: replace_reproduction_test
+    consumes_repair_budget: true
+
+  # Re-apply differs from forward → flaky test
+  - from: audit
+    trigger: rejection.reason == "flaky_test"
+    to: design-test
+    action: replace_reproduction_test
+    consumes_repair_budget: true
+
+  # Fix.patch modified test files or non-source artifacts
+  - from: audit
+    trigger: rejection.reason == "fix_out_of_scope"
+    to: fix
+    action: reject_fix
+    consumes_repair_budget: true
+
+  # Regressions in full suite
+  - from: audit
+    trigger: rejection.reason == "regressions"
+    to: fix
+    action: reject_fix
+    consumes_repair_budget: true
+
+  # Test never failed in the first place → analysis is wrong
+  - from: audit
+    trigger: rejection.reason == "test_passes_on_clean_tree"
+    to: analyze
+    action: re_analyze
+    consumes_repair_budget: true
+
+# Terminal outputs (what the workflow returns to the caller on success)
+outputs:
+  - name: approved_fix
+    type: artifact
+    description: The fix.patch that passed reverse validation
+    source: audit.audit_report.md
+
+  - name: audit_report
+    type: file
+    description: Full audit trail (reproducible, re-runnable)
+    source: audit.audit_report.md

@@ -42,6 +42,9 @@ export const SCHEMA_SQL = `
       description TEXT NOT NULL DEFAULT '',
       current_stage TEXT NOT NULL DEFAULT 'spec',
       status TEXT NOT NULL DEFAULT 'active',
+      intent TEXT NOT NULL DEFAULT 'new_feature',
+      locked_files TEXT,
+      looks_like TEXT,
       created_at INTEGER NOT NULL
     );
 
@@ -72,6 +75,8 @@ export const SCHEMA_SQL = `
       name TEXT NOT NULL,
       description TEXT NOT NULL DEFAULT '',
       is_archived INTEGER NOT NULL DEFAULT 0,
+      inputs_json TEXT NOT NULL DEFAULT '[]',
+      rejection_edges_json TEXT NOT NULL DEFAULT '[]',
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
@@ -145,5 +150,10 @@ export function initDb() {
   try { sqlite.exec(`ALTER TABLE workspaces ADD COLUMN default_workflow_id TEXT REFERENCES workflows(id)`) } catch { /* already exists */ }
   try { sqlite.exec(`ALTER TABLE features ADD COLUMN current_workflow_id TEXT REFERENCES workflows(id)`) } catch { /* already exists */ }
   try { sqlite.exec(`ALTER TABLE features ADD COLUMN current_node_id TEXT NOT NULL DEFAULT 'spec'`) } catch { /* already exists */ }
+  try { sqlite.exec(`ALTER TABLE features ADD COLUMN intent TEXT NOT NULL DEFAULT 'new_feature'`) } catch { /* already exists */ }
+  try { sqlite.exec(`ALTER TABLE features ADD COLUMN locked_files TEXT`) } catch { /* already exists */ }
+  try { sqlite.exec(`ALTER TABLE features ADD COLUMN looks_like TEXT`) } catch { /* already exists */ }
   try { sqlite.exec(`ALTER TABLE stage_runs ADD COLUMN node_id TEXT`) } catch { /* already exists */ }
+  try { sqlite.exec(`ALTER TABLE workflows ADD COLUMN inputs_json TEXT NOT NULL DEFAULT '[]'`) } catch { /* already exists */ }
+  try { sqlite.exec(`ALTER TABLE workflows ADD COLUMN rejection_edges_json TEXT NOT NULL DEFAULT '[]'`) } catch { /* already exists */ }
 }
