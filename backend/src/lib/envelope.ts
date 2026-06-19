@@ -36,6 +36,9 @@ export const Code = {
   STAGERUN_NOT_FOUND: 2003,
   STAGERUN_NO_SESSION: 2004,
   WORKFLOW_NOT_FOUND: 2005,
+  // Implements: docs/prd/0001-bug-fix-workflow.md (Issue 04)
+  // GET /api/features/:id/audit-report when the gatekeeper has not run yet.
+  AUDIT_REPORT_NOT_FOUND: 2006,
   REPO_DIR_EXISTS: 2101,
   REPO_DIR_NOT_EMPTY: 2102,
   REPO_MISSING_FOR_RUN: 2110,

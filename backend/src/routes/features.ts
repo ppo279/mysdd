@@ -325,7 +325,7 @@ export async function featureRoutes(app: FastifyInstance) {
     const data = await loadAuditReport(featureId, feature.workspaceId)
     if (!data) {
       throw new BizError(
-        Code.WORKFLOW_INVALID,
+        Code.AUDIT_REPORT_NOT_FOUND,
         `Feature ${featureId} has no audit report yet (gatekeeper has not run)`,
         404,
       )

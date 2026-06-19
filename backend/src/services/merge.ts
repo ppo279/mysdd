@@ -24,6 +24,7 @@ import {
 } from '../db/schema.js'
 import { BizError, Code } from '../lib/envelope.js'
 import { ArtifactService } from './artifact.js'
+import { assertWithinWorkspaceBase } from '../routes/workspaces.js'
 
 // ============================================================================
 // Constants
@@ -99,28 +100,6 @@ interface AuditRunRow {
   rejectionReason: string | null
   approvedAt: Date | null
   createdAt: Date
-}
-
-/** Read the 4 audit artifacts as a typed map. Missing outputs → ''. */
-function readAuditOutputs(stageRunId: string): {
-  auditReportMd: string
-  reverseValidationLog: string
-  mutationTestLog: string
-  coverageDelta: string
-} {
-  // 4 outputs live under storage/<ws>/<feat>/audit/
-  const dir = path.dirname(ArtifactService.getArtifactPath('__ws__', '__feat__', AUDIT_NODE_ID, 'placeholder'))
-  // The dir for a given feature is reconstructed from the DB row instead —
-  // this function only exists for the helper to share its result type; the
-  // actual paths come from the caller.
-  void dir
-  // Caller must pass the real paths via the structured `outputs` field.
-  return {
-    auditReportMd: '',
-    reverseValidationLog: '',
-    mutationTestLog: '',
-    coverageDelta: '',
-  }
 }
 
 /**
@@ -336,18 +315,16 @@ export function resolveCommitMessageFields(opts: {
 
 /** Build the TF1 commit message body. */
 export function buildCommitMessage(fields: CommitMessageFields): string {
+  // Per CONTEXT.md decision 21 (TF1), all three trailers are mandatory:
+  // `Bug:` / `Adds regression test:` / `Audit:`. We always emit them; if
+  // a field couldn't be resolved, fall back to '(unspecified)' so the
+  // trailer is present and grep-able for the regression-guard tooling.
   const lines: string[] = []
   lines.push(`fix(${fields.scope}): ${fields.summary}`)
   lines.push('')
-  if (fields.bug) {
-    lines.push(`Bug: ${fields.bug}`)
-  }
-  if (fields.testPath) {
-    lines.push(`Adds regression test: ${fields.testPath}`)
-  }
-  if (fields.auditPath) {
-    lines.push(`Audit: ${fields.auditPath}`)
-  }
+  lines.push(`Bug: ${fields.bug || '(unspecified)'}`)
+  lines.push(`Adds regression test: ${fields.testPath || '(unspecified)'}`)
+  lines.push(`Audit: ${fields.auditPath || AUDIT_PATH_IN_REPO}`)
   return lines.join('\n')
 }
 
@@ -378,6 +355,10 @@ export async function commitFeatureFix(opts: CommitFeatureFixOpts): Promise<Comm
       409,
     )
   }
+  // Path-traversal guard: the worktree path comes from ensureFeatureWorktree
+  // (which itself nests under WORKSPACE_BASE), but a malformed DB row or a
+  // future caller could supply an outside path. The guard is cheap; do it.
+  assertWithinWorkspaceBase(opts.featureWorktreePath)
 
   const branch = `bugfix/${opts.featureId}`
   // Sanity: HEAD on the worktree must be on bugfix/<featId>

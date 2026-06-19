@@ -113,11 +113,13 @@ onMounted(async () => {
 })
 
 // Implements: docs/prd/0001-bug-fix-workflow.md (Issue 04)
-// feature.status 切到 approved / merged 时重拉审核报告（让"刚批完"也能看到）
+// feature.status 切到 approved / merged 时重拉审核报告（让"刚批完"也能看到）。
+// 注意：如果 status 已经是 approved/merged 挂载（没有"变化"），onMounted 已经
+// 拉过一次；这里也用 auditReport 的 null 状态做兜底（首次加载失败时可重试）。
 watch(
-  () => chat.featureDetail?.status,
-  async (s) => {
-    if (s === 'approved' || s === 'merged') {
+  [() => chat.featureDetail?.status, () => chat.auditReport],
+  async ([s, ar]) => {
+    if ((s === 'approved' || s === 'merged') && !ar) {
       try { await chat.loadAuditReport(featureId) } catch { /* ignore */ }
     }
   },
@@ -641,9 +643,6 @@ function colorizeDiffLine(line: string): { color: string; bg: string } {
 
         <!-- 产物编辑器（Phase 3：按 outputName 分 tab；旧版本仅 'default'） -->
         <NScrollbar v-else style="flex:1;">
-
-        <!-- 产物编辑器（Phase 3：按 outputName 分 tab；旧版本仅 'default'） -->
-        <NScrollbar style="flex:1;">
           <NTabs
             v-if="artifactOutputNames.length > 0"
             v-model:value="activeOutputName"
