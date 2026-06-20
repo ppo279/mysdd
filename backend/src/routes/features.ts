@@ -24,6 +24,7 @@ import { createSyntheticIntakeRun, parseWorkflowInputs } from '../services/intak
 import { removeFeatureWorktree, ensureFeatureWorktree } from '../services/worktree.js'
 import { loadAuditReport, commitFeatureFix } from '../services/merge.js'
 import { clearFeatureLocks, evaluateQueueForWorkspace, LOCK_RELEASING_STATUSES, findConflictingSiblings, parseLockedFiles } from '../services/queue.js'
+import { upgradeWorkflow } from '../services/upgrade.js'
 
 // Implements: docs/prd/0001-bug-fix-workflow.md (Issue 01)
 const FeatureIntentSchema = z.enum(['bug_fix', 'spec_change', 'new_feature', 'refactor'])
@@ -427,6 +428,19 @@ export async function featureRoutes(app: FastifyInstance) {
       ...result,
       hint: 'The branch is ready to merge into your main branch. No auto-merge has been performed.',
     })
+  })
+
+  // Implements: docs/prd/0001-bug-fix-workflow.md (Issue 07)
+  // POST /api/features/:featureId/upgrade
+  // body: { targetWorkflowId: string }
+  const UpgradeFeatureSchema = z.object({
+    targetWorkflowId: z.string().min(1),
+  })
+  app.post('/api/features/:featureId/upgrade', async (req, reply) => {
+    const { featureId } = req.params as { featureId: string }
+    const body = UpgradeFeatureSchema.parse(req.body)
+    const result = await upgradeWorkflow({ featureId, targetWorkflowId: body.targetWorkflowId })
+    return ok(reply, result)
   })
 
   // 切换 feature 的工作流
