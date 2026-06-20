@@ -37,14 +37,16 @@ export async function createInitialWorkflow(workspaceId: string): Promise<string
   })
 
   // 插节点（nodeId = agentId，确保 UNIQUE(workflow_id, node_id) 与 agents 一一对应）
+  // 水平均布以避免画布节点全堆在 (0,0) — 间距 280 与 seed.ts / AgentNode.vue 对齐
+  const NODE_SPACING_X = 280
   if (agents.length > 0) {
     await db.insert(workflowNodes).values(
-      agents.map((a) => ({
+      agents.map((a, i) => ({
         id: randomUUID(),
         workflowId,
         nodeId: a.id,
         agentId: a.id,
-        positionX: 0,
+        positionX: i * NODE_SPACING_X,
         positionY: 0,
         configJson: '{}',
         displayName: a.name,

@@ -47,10 +47,14 @@ export async function seedBugFixWorkflow(workspaceId: string): Promise<SeedWorkf
   const validAgentIds = new Set(loadAgentsConfig().agents.map((a) => a.id))
   const missingAgentIds = Array.from(new Set(wfYaml.nodes.map((n) => n.agentId).filter((id) => !validAgentIds.has(id))))
 
-  const nodeRows: WorkflowNodeRow[] = wfYaml.nodes.map((n) => ({
+  // 按 yaml 节点顺序水平均布,避免画布上所有节点重叠在 (0,0)。
+  // 间距选 280px 配合 AgentNode.vue 里 min-width:180 + 72 padding*2 ≈ 324 的盒子宽度,
+  // 相邻节点之间留约 100px 缝隙,既不挤也不浪费空间。
+  const NODE_SPACING_X = 280
+  const nodeRows: WorkflowNodeRow[] = wfYaml.nodes.map((n, idx) => ({
     nodeId: n.nodeId,
     agentId: n.agentId,
-    positionX: 0,
+    positionX: idx * NODE_SPACING_X,
     positionY: 0,
   }))
   // 保留节点边（__intake__ → real, real → __terminal__）需要单独处理：
