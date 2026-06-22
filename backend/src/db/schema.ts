@@ -57,6 +57,11 @@ export const stageRuns = sqliteTable('stage_runs', {
   attempt: integer('attempt').notNull().default(1),
   parentStageRunId: text('parent_stage_run_id'),
   rejectionReason: text('rejection_reason'),
+  // Implements: .scratch/agent-contract-db/issues/02-yaml-to-db.md
+  // Issue 03 起：startStage 把 agent.instruction 写入此处；resume 时 buildSystemPrompt
+  // 读 snapshot 而非 live agent.instruction，避免"边跑边改 instruction"导致行为漂移。
+  // 本 slice 只加列，issue 03 才在 startStage / sendMessage 中读写。
+  instructionSnapshot: text('instruction_snapshot'),
 })
 
 export const messages = sqliteTable('messages', {
@@ -135,4 +140,41 @@ export const featureNodeMigrations = sqliteTable('feature_node_migrations', {
   mappingJson: text('mapping_json').notNull(),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
   appliedAt: integer('applied_at', { mode: 'timestamp' }),
+})
+
+// Implements: .scratch/agent-contract-db/issues/02-yaml-to-db.md
+// 把 agents.yaml 拆到三张表；之后 ConfigView 编辑落 DB，yaml 不再被读。
+// base_layers 与 runtimes 是 agents 的上游；agents.runtime_id 引用 runtimes.id。
+export const runtimes = sqliteTable('runtimes', {
+  id: text('id').primaryKey(),
+  type: text('type').notNull(),
+  command: text('command').notNull().default(''),
+})
+
+export const baseLayers = sqliteTable('base_layers', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  content: text('content').notNull(),
+  // position 在 baseLayers 拼接顺序中起决定作用；UNIQUE(position) 由 DDL 保证。
+  position: integer('position').notNull().default(0),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
+})
+
+export const agents = sqliteTable('agents', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  // ON DELETE RESTRICT 防止误删一个仍有 agent 用的 runtime；
+  // PUT /api/config/agents 必须先写 runtimes，再写 agents 才能满足 FK。
+  runtimeId: text('runtime_id').notNull().references(() => runtimes.id, { onDelete: 'restrict' }),
+  instruction: text('instruction').notNull(),
+  // inputs_json / outputs_json 形状：[string]；
+  // issue 03 才把它们接到 prompt 注入和 approve 校验，本 slice 只是搬运。
+  inputsJson: text('inputs_json').notNull().default('["default"]'),
+  outputsJson: text('outputs_json').notNull().default('["default"]'),
+  // memory_sediment 0/1（SQLite 无原生 bool）
+  memorySediment: integer('memory_sediment').notNull().default(0),
+  configJson: text('config_json').notNull().default('{}'),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
 })

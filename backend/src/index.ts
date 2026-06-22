@@ -21,6 +21,20 @@ fs.mkdirSync(storageDir, { recursive: true })
 
 initDb()
 
+// Implements: .scratch/agent-contract-db/issues/02-yaml-to-db.md
+// 启动期 seeder：若 agents 表为空且 agents.yaml 存在 → 一次性写入 DB。
+// 启动期 fail-fast（写入失败 → 进程非零退出，避免半状态）。
+try {
+  const { seedAgentsFromYaml } = await import('./services/agent-seed.js')
+  const didSeed = seedAgentsFromYaml()
+  if (didSeed) {
+    console.log('[boot] agents seeded from agents.yaml')
+  }
+} catch (e: any) {
+  console.error('[boot] failed to seed agents from yaml:', e?.message ?? e)
+  process.exit(1)
+}
+
 const app = Fastify({ logger: { level: 'info' } })
 
 await app.register(cors, { origin: true })

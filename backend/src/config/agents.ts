@@ -1,18 +1,22 @@
-import fs from 'fs'
-import path from 'path'
-import yaml from 'js-yaml'
-import { z } from 'zod'
-import { fileURLToPath } from 'url'
+// Implements: .scratch/agent-contract-db/issues/02-yaml-to-db.md
+// 改读 DB 后行为说明：
+// - loadAgentsConfig() 不再读 agents.yaml；改为读 runtimes / base_layers / agents 三张表。
+// - 返回的对象形状仍是 AgentsYaml（runtimes / global.base_layers / agents），与之前一致；
+//   ConfigView GET 拿到的 data 直接就是 yaml 形状，前端无感。
+// - clearCache() 清掉 in-memory 缓存；调用方（routes/config.ts PUT）须额外 clearRuntimeCache()。
+// - 启动期：index.ts 先 initDb() 再 seedAgentsFromYaml()（seed 在 agents 表为空时把 yaml 写入）；
+//   loadAgentsConfig 永远在 seed 之后被调用，读到的是 DB 里的最新数据。
+
+import { asc } from 'drizzle-orm'
+import { db } from '../db/index.js'
+import { runtimes, baseLayers, agents } from '../db/schema.js'
 import { BizError, Code } from '../lib/envelope.js'
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const ROOT = path.resolve(__dirname, '../../..')
-
 // Implements: docs/adr/0001-workflow-execution-model.md
-// Phase 2 起：每个 agent 可声明 per-agent 的 runtime config（YAML 级默认）；
+// Phase 2 起：每个 agent 可声明 per-agent 的 runtime config（DB 级默认）；
 // workflow_nodes.config_json（per-node 覆盖）在 services/agent.ts 中优先。
 export interface AgentRuntimeConfig {
-  // 覆盖 agents.yaml 中 agent.runtime 字段；用于"同一个 agent 偶尔切到不同 CLI"
+  // 覆盖 agents 表中 agent.runtime_id 字段；用于"同一个 agent 偶尔切到不同 CLI"
   runtimeId?: string
   // 透传给 spawn 的环境变量。Phase 2 不做去重 / 优先级——直接 merge 到 process.env
   env?: Record<string, string>
@@ -20,8 +24,14 @@ export interface AgentRuntimeConfig {
   cwd?: string
   // 子进程超时（ms）；超时触发后由 runtime adapter 调 proc.kill()
   timeoutMs?: number
+  // Implements: docs/prds/per-agent-tool-restriction.md / docs/issues/002
+  // 逗号分隔字符串，透传给 CLI 的 --disallowedTools（当前仅 Claude 支持）。
+  // 空串等价于 undefined（normalizeCsv 归一化）；CLI 偶发 " Bash " 等前后空白由调用方 trim。
+  disallowedTools?: string
 }
 
+// 注意：本 slice 内 `AgentConfig` 接口**不动**——
+// inputs/outputs 字段在 issue 03 才加（PRD 实现决策）。本 slice 只搬数据，不改契约。
 export interface AgentConfig {
   id: string
   name: string
@@ -29,9 +39,9 @@ export interface AgentConfig {
   instruction: string
   outputFile: string
   // Implements: spec.md#BI-07 / plan.md#D-03 / tasks.md#T008
-  // agents.yaml 中显式声明的"记忆沉淀"职责；缺省 false，仅 true 允许写 memory/.draft/
+  // DB agents.memory_sediment（0/1）；缺省 false，仅 true 允许写 memory/.draft/
   memory_sediment?: boolean
-  // Phase 2: per-agent runtime config（YAML 级默认；workflow_nodes.config_json 覆盖之）
+  // Phase 2: per-agent runtime config（DB 级默认；workflow_nodes.config_json 覆盖之）
   config?: AgentRuntimeConfig
 }
 
@@ -56,72 +66,49 @@ export interface AgentsYaml {
   agents: AgentConfig[]
 }
 
-// Implements: spec.md#AC-06 / plan.md#D-03 / tasks.md#T008
-// memory_sediment 字段类型校验：仅 boolean | undefined；非此抛错（启动期 fail-fast）
-const MemorySedimentSchema = z.boolean().optional()
-
-// Phase 2: per-agent runtime config 的 zod schema。
-// - runtimeId: 字符串（解析期校验是否在 runtimes[] 中；此处只查类型，避免启动期与 config/routes/config.ts 形成循环依赖）
-// - env: 字符串 k/v map
-// - cwd: 字符串（路径合法性由 routes 层 assertWithinWorkspaceBase 守卫，配置层不重复）
-// - timeoutMs: 正整数
-const AgentRuntimeConfigSchema = z.object({
-  runtimeId: z.string().min(1).optional(),
-  env: z.record(z.string(), z.string()).optional(),
-  cwd: z.string().min(1).optional(),
-  timeoutMs: z.number().int().positive().optional(),
-}).optional()
-
 let _config: AgentsYaml | null = null
 
 export function clearCache() {
   _config = null
 }
 
+/**
+ * 把 DB 当前内容序列化为 yaml 形状的 AgentsYaml。
+ * - runtimes 按 id 升序（确定性顺序，PUT 写回后形状不变）
+ * - base_layers 按 position 升序（保持拼接顺序）
+ * - agents 按 id 升序
+ *
+ * 字段缺失/JSON 解析失败时静默归一化为空值（db 已是 source of truth，不应抛错）。
+ */
 export function loadAgentsConfig(): AgentsYaml {
   if (_config) return _config
 
-  const yamlPath = path.resolve(ROOT, 'agents.yaml')
-  const raw = fs.readFileSync(yamlPath, 'utf-8')
-  const parsed = yaml.load(raw) as Record<string, unknown>
-
-  const globalRaw = (parsed.global ?? {}) as Record<string, unknown>
-
-  const agentsRaw = (parsed.agents as Array<Record<string, unknown>>) ?? []
-  // 启动期 fail-fast：校验每个 agent 的 memory_sediment 类型 + Phase 2 的 config 字段类型
-  for (const a of agentsRaw) {
-    if (!MemorySedimentSchema.safeParse(a.memory_sediment).success) {
-      throw new BizError(
-        Code.YAML_INVALID,
-        `Invalid memory_sediment in agent "${String(a.id)}": must be boolean or undefined ` +
-        `(got ${typeof a.memory_sediment})`,
-        500,
-      )
-    }
-    const cfgRes = AgentRuntimeConfigSchema.safeParse(a.config)
-    if (!cfgRes.success) {
-      throw new BizError(
-        Code.YAML_INVALID,
-        `Invalid config in agent "${String(a.id)}": ${cfgRes.error.issues.map((i) => i.message).join('; ')}`,
-        500,
-      )
-    }
-  }
+  const rts = db.select().from(runtimes).orderBy(asc(runtimes.id)).all()
+  const bls = db.select().from(baseLayers).orderBy(asc(baseLayers.position)).all()
+  const ags = db.select().from(agents).orderBy(asc(agents.id)).all()
 
   _config = {
-    runtimes: (parsed.runtimes as RuntimeConfig[]) ?? [],
+    runtimes: rts.map((r) => ({ id: r.id, type: r.type, command: r.command || undefined })),
     global: {
-      base_layers: (globalRaw.base_layers as BaseLayer[]) ?? [],
+      base_layers: bls.map((b) => ({ name: b.name, content: b.content })),
     },
-    agents: agentsRaw.map((a) => {
-      const cfg = AgentRuntimeConfigSchema.parse(a.config) as AgentRuntimeConfig | undefined
+    agents: ags.map((a) => {
+      let cfg: AgentRuntimeConfig | undefined
+      try {
+        const parsed = JSON.parse(a.configJson)
+        if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
+          cfg = parsed as AgentRuntimeConfig
+        }
+      } catch { /* malformed json → leave cfg undefined */ }
       return {
-        id: a.id as string,
-        name: a.name as string,
-        runtime: a.runtime as string,
-        instruction: (a.instruction as string) ?? '',
-        outputFile: a.output_file as string,
-        memory_sediment: (a.memory_sediment as boolean | undefined) ?? false,
+        id: a.id,
+        name: a.name,
+        runtime: a.runtimeId,
+        instruction: a.instruction,
+        // outputFile 字段：DB 不存——保留旧 yaml 形状，置空串。
+        // 已有调用方（services/agent.ts 等）通过 agent.id 拿产物，不依赖此字段。
+        outputFile: '',
+        memory_sediment: a.memorySediment === 1,
         config: cfg,
       }
     }),
@@ -136,7 +123,7 @@ export function getAgentConfig(agentId: string): AgentConfig {
   if (!agent) {
     throw new BizError(
       Code.INTERNAL,
-      `Agent "${agentId}" not found in agents.yaml`,
+      `Agent "${agentId}" not found in agents table`,
       500,
     )
   }
@@ -153,8 +140,8 @@ export interface FeatureContext {
 }
 
 // ── 系统提示拼装（三层）────────────────────────────────────────
-// Layer 1: global.base_layers（所有 Agent 共享，inline 内容）
-// Layer 2: agent instruction（inline 内容）- 占位符 [项目名称] [想法描述] [任务模式] 被替换
+// Layer 1: global.base_layers（所有 Agent 共享，DB 里顺序由 position 决定）
+// Layer 2: agent instruction（DB agents.instruction）- 占位符 [项目名称] [想法描述] [任务模式] 被替换
 // Layer 3: workspace 背景（运行时注入）
 export function buildSystemPrompt(
   agentId: string,
