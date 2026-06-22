@@ -142,9 +142,10 @@ export const featureNodeMigrations = sqliteTable('feature_node_migrations', {
   appliedAt: integer('applied_at', { mode: 'timestamp' }),
 })
 
-// Implements: .scratch/agent-contract-db/issues/02-yaml-to-db.md
-// 把 agents.yaml 拆到三张表；之后 ConfigView 编辑落 DB，yaml 不再被读。
+// Implements: .scratch/agent-contract-db/issues/02-yaml-to-db.md, .scratch/agent-contract-db/issues/05-yaml-cleanup.md
+// （历史）slice 02 把 agents.yaml 拆到三张表；slice 05 删除 yaml 路径。
 // base_layers 与 runtimes 是 agents 的上游；agents.runtime_id 引用 runtimes.id。
+// ConfigView PUT 是唯一写路径；空 DB 启动是合法的。
 export const runtimes = sqliteTable('runtimes', {
   id: text('id').primaryKey(),
   type: text('type').notNull(),

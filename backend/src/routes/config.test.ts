@@ -1,5 +1,6 @@
-// Implements: .scratch/agent-contract-db/issues/02-yaml-to-db.md
-// slice 02 起：routes/config.ts 不再读写 agents.yaml；
+// Implements: .scratch/agent-contract-db/issues/02-yaml-to-db.md, .scratch/agent-contract-db/issues/05-yaml-cleanup.md
+// （历史）slice 02 把 yaml 写入路径迁到 DB；slice 05 删除 yaml 读取路径。
+// routes/config.ts 从此完全走 DB：
 //   - GET /api/config/agents → 读 DB 拼 yaml 形状
 //   - PUT /api/config/agents → 写 DB 三表，事务包住；FK 失败时整体回滚
 //
@@ -36,7 +37,8 @@ for (const sql of IDEMPOTENT_ALTERS) {
 }
 ;(globalThis as any).__testDb = drizzle(sqlite, { schema })
 
-const { seedAgentsFromYamlString, clearAgentsTables } = await import('../services/agent-seed.js')
+const { seedAgentsFixture, clearAgentsTables } = await import('../services/agent-seed.js')
+type AgentsFixture = import('../services/agent-seed.js').AgentsFixture
 const { configRoutes } = await import('./config.js')
 const { clearCache, loadAgentsConfig } = await import('../config/agents.js')
 
@@ -47,16 +49,16 @@ async function buildApp() {
   return app
 }
 
-const SAMPLE_YAML = `
-runtimes:
-  - { id: claude, type: claude-cli, command: claude }
-global:
-  base_layers:
-    - { name: constitution, content: "# Constitution" }
-agents:
-  - { id: spec, name: Spec Agent, runtime: claude, instruction: "Spec instr", output_file: spec.md, memory_sediment: true }
-  - { id: plan, name: Plan Agent, runtime: claude, instruction: "Plan instr", output_file: plan.md }
-`
+const SAMPLE_FIXTURE: AgentsFixture = {
+  runtimes: [{ id: 'claude', type: 'claude-cli', command: 'claude' }],
+  global: {
+    base_layers: [{ name: 'constitution', content: '# Constitution' }],
+  },
+  agents: [
+    { id: 'spec', name: 'Spec Agent', runtime: 'claude', instruction: 'Spec instr', output_file: 'spec.md', memory_sediment: true },
+    { id: 'plan', name: 'Plan Agent', runtime: 'claude', instruction: 'Plan instr', output_file: 'plan.md' },
+  ],
+}
 
 beforeEach(() => {
   clearAgentsTables()
@@ -69,7 +71,7 @@ beforeEach(() => {
 
 describe('routes/config.ts envelope 契约（slice 02）', () => {
   it('GET /api/config/agents 返回 envelope（code=0, data 包含 runtimes/global/agents）', async () => {
-    seedAgentsFromYamlString(SAMPLE_YAML)
+    seedAgentsFixture(SAMPLE_FIXTURE)
     clearCache()
     const app = await buildApp()
     const res = await app.inject({ method: 'GET', url: '/api/config/agents' })
@@ -112,7 +114,7 @@ describe('routes/config.ts envelope 契约（slice 02）', () => {
 
 describe('GET shape：从 DB 拼出 yaml 形状', () => {
   it('DB 含数据 → GET 返回的 data 与原 yaml 形状一致', async () => {
-    seedAgentsFromYamlString(SAMPLE_YAML)
+    seedAgentsFixture(SAMPLE_FIXTURE)
     clearCache()
     const app = await buildApp()
     const res = await app.inject({ method: 'GET', url: '/api/config/agents' })
@@ -176,7 +178,7 @@ describe('PUT shape：PUT 写入与 GET 读出 deep-equal', () => {
   })
 
   it('PUT 覆盖已有内容：先 seed，再 PUT，新内容生效（不留 stale runtimes / agents）', async () => {
-    seedAgentsFromYamlString(SAMPLE_YAML)
+    seedAgentsFixture(SAMPLE_FIXTURE)
     clearCache()
     const app = await buildApp()
     const payload = {
@@ -204,7 +206,7 @@ describe('PUT shape：PUT 写入与 GET 读出 deep-equal', () => {
 
 describe('PUT atomicity：FK 失败时整 PUT 回滚', () => {
   it('PUT 时 agent.runtime_id 引用不存在的 runtime → 三表都恢复原状', async () => {
-    seedAgentsFromYamlString(SAMPLE_YAML)
+    seedAgentsFixture(SAMPLE_FIXTURE)
     clearCache()
 
     // 取一份原状快照
@@ -252,7 +254,7 @@ describe('PUT atomicity：FK 失败时整 PUT 回滚', () => {
 
 describe('PUT 后缓存失效', () => {
   it('PUT 修改 agent name → loadAgentsConfig 必须返新值（不命中旧缓存）', async () => {
-    seedAgentsFromYamlString(SAMPLE_YAML)
+    seedAgentsFixture(SAMPLE_FIXTURE)
     clearCache()
 
     // 第一次读：缓存命中

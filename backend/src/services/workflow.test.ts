@@ -152,7 +152,7 @@ describe('validateWorkflow', () => {
 
   it('未知 agentId（nodeId === agentId） → 抛 BizError code=1011 WORKFLOW_INVALID', () => {
     try {
-      // nodeId === agentId 让检查跳过 NODE_ID_MISMATCH，落入"agent 不在 agents.yaml"分支
+      // nodeId === agentId 让检查跳过 NODE_ID_MISMATCH，落入"agent 不在 agents 表"分支
       validateWorkflow({ nodes: [n('nonexistent', 'nonexistent')], edges: [] })
       throw new Error('应抛错')
     } catch (e) {

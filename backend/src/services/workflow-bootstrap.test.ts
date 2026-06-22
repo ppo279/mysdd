@@ -8,7 +8,7 @@ import { drizzle } from 'drizzle-orm/better-sqlite3'
 import * as schema from '../db/schema.js'
 
 // ── mock: config/agents ──
-// mockAgents 是本次测试使用的"agents.yaml 视图"；每次测试自己填充
+// mockAgents 是本次测试使用的"agents 表视图"；每次测试自己填充
 const { mockAgents } = vi.hoisted(() => ({ mockAgents: [] as Array<{ id: string; name: string }> }))
 vi.mock('../config/agents.js', () => ({
   loadAgentsConfig: () => ({

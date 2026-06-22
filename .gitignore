@@ -125,7 +125,6 @@ ehthumbs.db
 *.orig
 
 
-agents.yaml
 CLAUDE.md
 /e2e/
 .codefree

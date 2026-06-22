@@ -126,7 +126,7 @@ export async function workflowRoutes(app: FastifyInstance) {
   })
 
   // 创建 workflow（全量）
-  // 校验：nodes 至少一个 / 内部 nodeId 唯一 / agentId 都在 agents.yaml / 边端点存在 / 无环
+  // 校验：nodes 至少一个 / 内部 nodeId 唯一 / agentId 都在 agents 表 / 边端点存在 / 无环
   app.post('/api/workspaces/:workspaceId/workflows', async (req, reply) => {
     const { workspaceId } = req.params as { workspaceId: string }
     const body = CreateWorkflowSchema.parse(req.body)

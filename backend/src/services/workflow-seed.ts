@@ -19,7 +19,7 @@ import { isReservedNodeId, validateWorkflow, type WorkflowNodeRow, type Workflow
 export interface SeedWorkflowResult {
   workflowId: string
   alreadyExisted: boolean
-  /** 引用了未在 agents.yaml 中声明的 agentId；节点会保留但功能受限（issue #2 之前合法）。 */
+  /** 引用了未在 agents 表中声明的 agentId；节点会保留但功能受限（issue #2 之前合法）。 */
   missingAgentIds: string[]
 }
 

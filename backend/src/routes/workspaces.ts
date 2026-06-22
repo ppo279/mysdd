@@ -156,7 +156,7 @@ export async function workspaceRoutes(app: FastifyInstance) {
       // 创建 repo/ memory/ tmp/ 三层布局 + MEMORY.md + .gitignore
       await createWorkspaceLayout(localPath)
       // Implements: docs/adr/0001-workflow-execution-model.md (Phase 0)
-      // 种子"默认工作流"：从 agents.yaml 读出 agent 列表，插入 1 个 workflows + N 个 workflow_nodes + (N-1) 个串联的 workflow_edges
+      // 种子"默认工作流"：从 agents 表读出 agent 列表，插入 1 个 workflows + N 个 workflow_nodes + (N-1) 个串联的 workflow_edges
       // 设回 workspaces.default_workflow_id。失败时回滚（workflow 表上没有 CASCADE 到 workspace，所以这里顺序很重要）
       await createInitialWorkflow(id)
       // Implements: docs/prd/0001-bug-fix-workflow.md (Issue 01)

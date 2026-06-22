@@ -1,8 +1,8 @@
 // Implements: docs/adr/0001-workflow-execution-model.md
-// workspace 创建时，从 agents.yaml 读出 agent 列表并种子一条"默认工作流"：
+// workspace 创建时，从 agents 表读出 agent 列表并种子一条"默认工作流"：
 // - 一个 workflows 行
 // - 每个 agent 一个 workflow_nodes 行（nodeId 默认等于 agentId，displayName=agentName）
-// - 按 agents.yaml 数组顺序串联 workflow_edges：i → i+1
+// - 按 agents 表数组顺序串联 workflow_edges：i → i+1
 // - 把 workflows.id 写回 workspaces.default_workflow_id
 //
 // 重入：若 workspace 已有 default_workflow_id 则幂等返回。
@@ -30,7 +30,7 @@ export async function createInitialWorkflow(workspaceId: string): Promise<string
     id: workflowId,
     workspaceId,
     name: '默认工作流',
-    description: '由 agents.yaml 自动生成的初始工作流。',
+    description: '由 agents 表自动生成的初始工作流。',
     isArchived: 0,
     createdAt: now,
     updatedAt: now,
@@ -77,7 +77,7 @@ export async function createInitialWorkflow(workspaceId: string): Promise<string
 // Implements: docs/adr/0001-workflow-execution-model.md (Phase 4)
 //
 // runAgentSweep：扫一遍所有 workflow_nodes，若有节点引用的 agentId
-// 不在当前 agents.yaml 中（说明该 agent 被删了），则：
+// 不在当前 agents 表中（说明该 agent 被删了），则：
 //   1) 把该 workflow 标记为 archived（is_archived=1）
 //   2) 把该 workflow 下所有 feature_node_states 行标记为 rejected
 //

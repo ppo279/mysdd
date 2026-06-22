@@ -1,6 +1,6 @@
 // Implements: .scratch/agent-contract-db/issues/02-yaml-to-db.md
 // slice 02 起：loadAgentsConfig 不再读 agents.yaml，改为读 DB。
-// 测试用 in-memory SQLite + 完整 SCHEMA_SQL + seedAgentsFromYamlString 注入 fixture。
+// 测试用 in-memory SQLite + 完整 SCHEMA_SQL + seedAgentsFixture 注入 fixture。
 //
 // 保留的覆盖（迁移自 slice 02 之前）：
 // - AC-06: memory_sediment 解析（true / false / undefined / 非 boolean 抛错）
@@ -35,7 +35,7 @@ for (const sql of IDEMPOTENT_ALTERS) {
 }
 ;(globalThis as any).__testDb = drizzle(sqlite, { schema })
 
-const { seedAgentsFromYamlString, clearAgentsTables } = await import('../services/agent-seed.js')
+const { seedAgentsFixture, clearAgentsTables } = await import('../services/agent-seed.js')
 const agentsModule = await import('./agents.js')
 const {
   loadAgentsConfig,
@@ -45,71 +45,88 @@ const {
   buildEdgeBasedContext,
 } = agentsModule
 
-// ============== Fixtures (as YAML) ==============
+// ============== Fixtures (as TS objects, slice 05 起) ==============
 
 // 含 memory_sediment: true / false / 缺失 三种状态
-const FIXTURE_VALID = `
-runtimes:
-  - { id: claude, type: claude-cli, command: claude }
-global:
-  base_layers:
-    - { name: constitution, content: "# Project Constitution\\nNo memory refs here." }
-    - { name: agents-spec, content: "# AGENTS spec\\nNo memory refs here either." }
-agents:
-  - { id: spec,  name: Spec Agent,  runtime: claude, instruction: "Spec instruction",  output_file: spec.md }
-  - { id: plan,  name: Plan Agent,  runtime: claude, instruction: "Plan instruction",  output_file: plan.md, memory_sediment: true }
-  - { id: tasks, name: Task Agent,  runtime: claude, instruction: "Task instruction",  output_file: tasks.md }
-`
+const FIXTURE_VALID = {
+  runtimes: [{ id: 'claude', type: 'claude-cli', command: 'claude' }],
+  global: {
+    base_layers: [
+      { name: 'constitution', content: '# Project Constitution\nNo memory refs here.' },
+      { name: 'agents-spec', content: '# AGENTS spec\nNo memory refs here either.' },
+    ],
+  },
+  agents: [
+    { id: 'spec',  name: 'Spec Agent',  runtime: 'claude', instruction: 'Spec instruction',  output_file: 'spec.md' },
+    { id: 'plan',  name: 'Plan Agent',  runtime: 'claude', instruction: 'Plan instruction',  output_file: 'plan.md', memory_sediment: true },
+    { id: 'tasks', name: 'Task Agent',  runtime: 'claude', instruction: 'Task instruction', output_file: 'tasks.md' },
+  ],
+}
 
-const FIXTURE_NO_MEMORY_REF = `
-runtimes:
-  - { id: claude, type: claude-cli, command: claude }
-global:
-  base_layers:
-    - { name: layer1, content: "# Pure spec-driven-development rules.\\nWorkflow only." }
-    - { name: layer2, content: "# Project execution protocol.\\nRules only." }
-agents:
-  - { id: spec, name: Spec, runtime: claude, instruction: "Spec instruction for SDD workflow", output_file: spec.md }
-`
+const FIXTURE_NO_MEMORY_REF = {
+  runtimes: [{ id: 'claude', type: 'claude-cli', command: 'claude' }],
+  global: {
+    base_layers: [
+      { name: 'layer1', content: '# Pure spec-driven-development rules.\nWorkflow only.' },
+      { name: 'layer2', content: '# Project execution protocol.\nRules only.' },
+    ],
+  },
+  agents: [
+    { id: 'spec', name: 'Spec', runtime: 'claude', instruction: 'Spec instruction for SDD workflow', output_file: 'spec.md' },
+  ],
+}
 
-const FIXTURE_WITH_DISALLOWED_TOOLS = `
-runtimes:
-  - { id: claude, type: claude-cli, command: claude }
-global:
-  base_layers:
-    - { name: layer1, content: "Base layer 1" }
-agents:
-  - { id: spec, name: Spec, runtime: claude, instruction: "Spec", output_file: spec.md, config: { disallowedTools: "Bash,Edit,MultiEdit" } }
-  - { id: plan, name: Plan, runtime: claude, instruction: "Plan", output_file: plan.md }
-`
+const FIXTURE_WITH_DISALLOWED_TOOLS = {
+  runtimes: [{ id: 'claude', type: 'claude-cli', command: 'claude' }],
+  global: {
+    base_layers: [{ name: 'layer1', content: 'Base layer 1' }],
+  },
+  agents: [
+    { id: 'spec', name: 'Spec', runtime: 'claude', instruction: 'Spec', output_file: 'spec.md', config: { disallowedTools: 'Bash,Edit,MultiEdit' } },
+    { id: 'plan', name: 'Plan', runtime: 'claude', instruction: 'Plan', output_file: 'plan.md' },
+  ],
+}
 
-const FIXTURE_CONFIG_WITHOUT_DISALLOWED = `
-runtimes:
-  - { id: claude, type: claude-cli, command: claude }
-global:
-  base_layers: []
-agents:
-  - { id: spec, name: Spec, runtime: claude, instruction: "Spec", output_file: spec.md, config: { env: { FOO: bar } } }
-`
+const FIXTURE_CONFIG_WITHOUT_DISALLOWED = {
+  runtimes: [{ id: 'claude', type: 'claude-cli', command: 'claude' }],
+  global: { base_layers: [] },
+  agents: [
+    { id: 'spec', name: 'Spec', runtime: 'claude', instruction: 'Spec', output_file: 'spec.md', config: { env: { FOO: 'bar' } } },
+  ],
+}
 
-const FIXTURE_INVALID_DISALLOWED_TOOLS = `
-runtimes:
-  - { id: claude, type: claude-cli, command: claude }
-global:
-  base_layers: []
-agents:
-  - { id: spec, name: Spec, runtime: claude, instruction: "Spec", output_file: spec.md, config: { disallowedTools: 123 } }
-`
+// config.disallowedTools 非字符串 — runtime 校验 fail-fast
+// 用 as unknown as AgentsFixture 避开类型检查；runtime 校验应抛错。
+const FIXTURE_INVALID_DISALLOWED_TOOLS = {
+  runtimes: [{ id: 'claude', type: 'claude-cli', command: 'claude' }],
+  global: { base_layers: [] },
+  agents: [
+    {
+      id: 'spec',
+      name: 'Spec',
+      runtime: 'claude',
+      instruction: 'Spec',
+      output_file: 'spec.md',
+      config: { disallowedTools: 123 },
+    },
+  ],
+} as unknown as AgentsFixture
 
-// memory_sediment 非 boolean — seeder 启动期 fail-fast
-const FIXTURE_INVALID_BOOL = `
-runtimes:
-  - { id: claude, type: claude-cli, command: claude }
-global:
-  base_layers: []
-agents:
-  - { id: spec, name: Spec, runtime: claude, instruction: "Spec", output_file: spec.md, memory_sediment: "yes" }
-`
+// memory_sediment 非 boolean — runtime 校验 fail-fast
+const FIXTURE_INVALID_BOOL = {
+  runtimes: [{ id: 'claude', type: 'claude-cli', command: 'claude' }],
+  global: { base_layers: [] },
+  agents: [
+    {
+      id: 'spec',
+      name: 'Spec',
+      runtime: 'claude',
+      instruction: 'Spec',
+      output_file: 'spec.md',
+      memory_sediment: 'yes',
+    },
+  ],
+} as unknown as AgentsFixture
 
 // ============== Setup ==============
 
@@ -123,8 +140,10 @@ afterEach(() => {
   clearAgentsTables()
 })
 
-function seed(fixture: string) {
-  seedAgentsFromYamlString(fixture)
+import type { AgentsFixture } from '../services/agent-seed.js'
+
+function seed(fixture: AgentsFixture) {
+  seedAgentsFixture(fixture)
   clearCache()
 }
 
@@ -156,7 +175,7 @@ describe('AC-06: loadAgentsConfig 解析 memory_sediment', () => {
   })
 
   it('非 boolean 的 memory_sediment（string "yes"）→ seeder 抛错（fail-fast）', () => {
-    expect(() => seedAgentsFromYamlString(FIXTURE_INVALID_BOOL)).toThrow(/memory_sediment/)
+    expect(() => seedAgentsFixture(FIXTURE_INVALID_BOOL)).toThrow(/memory_sediment/)
   })
 })
 
@@ -185,14 +204,11 @@ describe('AC-04 / BI-02: buildSystemPrompt 不引用 memory/', () => {
 
 describe('slice 04: buildSystemPrompt 追加 ## 产出契约 小节', () => {
   it('agent.outputs 非空 → prompt 含 ## 产出契约 + 所有文件名（按数组顺序）', () => {
-    seed(`
-runtimes:
-  - { id: claude, type: claude-cli, command: claude }
-global:
-  base_layers: []
-agents:
-  - { id: spec, name: Spec, runtime: claude, instruction: "Spec", output_file: spec.md, outputs: [spec.md, summary.md] }
-`)
+    seed({
+      runtimes: [{ id: 'claude', type: 'claude-cli', command: 'claude' }],
+      global: { base_layers: [] },
+      agents: [{ id: 'spec', name: 'Spec', runtime: 'claude', instruction: 'Spec', output_file: 'spec.md', outputs: ['spec.md', 'summary.md'] }],
+    })
     const prompt = buildSystemPrompt('spec', 'ts', '')
     expect(prompt).toContain('## 产出契约')
     expect(prompt).toContain('`spec.md`')
@@ -204,14 +220,11 @@ agents:
   })
 
   it('agent.outputs 为空 → prompt 不含 ## 产出契约（避免无意义噪声）', () => {
-    seed(`
-runtimes:
-  - { id: claude, type: claude-cli, command: claude }
-global:
-  base_layers: []
-agents:
-  - { id: spec, name: Spec, runtime: claude, instruction: "Spec", output_file: spec.md }
-`)
+    seed({
+      runtimes: [{ id: 'claude', type: 'claude-cli', command: 'claude' }],
+      global: { base_layers: [] },
+      agents: [{ id: 'spec', name: 'Spec', runtime: 'claude', instruction: 'Spec', output_file: 'spec.md' }],
+    })
     const prompt = buildSystemPrompt('spec', 'ts', '')
     expect(prompt).not.toContain('## 产出契约')
   })
@@ -284,7 +297,7 @@ describe('001: AgentRuntimeConfig.disallowedTools 解析', () => {
   })
 
   it('config.disallowedTools: 123（非字符串）→ fail-fast 抛错', () => {
-    expect(() => seedAgentsFromYamlString(FIXTURE_INVALID_DISALLOWED_TOOLS)).toThrow()
+    expect(() => seedAgentsFixture(FIXTURE_INVALID_DISALLOWED_TOOLS)).toThrow()
   })
 })
 
@@ -301,19 +314,19 @@ describe('slice 02: loadAgentsConfig 读 DB', () => {
   })
 
   it('从 DB 读出 base_layers 时按 position 升序拼接', () => {
-    seed(`
-runtimes:
-  - { id: claude, type: claude-cli, command: claude }
-global:
-  base_layers:
-    - { name: z-layer, content: "Z content" }
-    - { name: a-layer, content: "A content" }
-    - { name: m-layer, content: "M content" }
-agents:
-  - { id: spec, name: Spec, runtime: claude, instruction: "Spec", output_file: spec.md }
-`)
+    seed({
+      runtimes: [{ id: 'claude', type: 'claude-cli', command: 'claude' }],
+      global: {
+        base_layers: [
+          { name: 'z-layer', content: 'Z content' },
+          { name: 'a-layer', content: 'A content' },
+          { name: 'm-layer', content: 'M content' },
+        ],
+      },
+      agents: [{ id: 'spec', name: 'Spec', runtime: 'claude', instruction: 'Spec', output_file: 'spec.md' }],
+    })
     const cfg = loadAgentsConfig()
-    // 顺序由写入时的 position 决定（按 yaml 顺序 position++），与 yaml 顺序一致
+    // 顺序由写入时的 position 决定（按 fixture 顺序 position++），与 fixture 顺序一致
     expect(cfg.global.base_layers.map((b) => b.name)).toEqual(['z-layer', 'a-layer', 'm-layer'])
     expect(cfg.global.base_layers[0].content).toBe('Z content')
     expect(cfg.global.base_layers[1].content).toBe('A content')
@@ -354,14 +367,14 @@ agents:
 
 describe('slice 03: AgentConfig.inputs / outputs 解析', () => {
   it('yaml 含 outputs / inputs → loadAgentsConfig 反序列化为 string[]', () => {
-    seed(`
-runtimes:
-  - { id: claude, type: claude-cli, command: claude }
-global:
-  base_layers: []
-agents:
-  - { id: spec, name: Spec, runtime: claude, instruction: "Spec", output_file: spec.md, outputs: [spec.md, summary.md], inputs: [context.md, brief.md] }
-`)
+    seed({
+      runtimes: [{ id: 'claude', type: 'claude-cli', command: 'claude' }],
+      global: { base_layers: [] },
+      agents: [{
+        id: 'spec', name: 'Spec', runtime: 'claude', instruction: 'Spec', output_file: 'spec.md',
+        outputs: ['spec.md', 'summary.md'], inputs: ['context.md', 'brief.md'],
+      }],
+    })
     const cfg = loadAgentsConfig()
     const spec = cfg.agents.find((a) => a.id === 'spec')
     expect(spec?.outputs).toEqual(['spec.md', 'summary.md'])
@@ -369,14 +382,11 @@ agents:
   })
 
   it('yaml 不填 outputs / inputs → 归一化为 []（空数组 = 没声明）', () => {
-    seed(`
-runtimes:
-  - { id: claude, type: claude-cli, command: claude }
-global:
-  base_layers: []
-agents:
-  - { id: spec, name: Spec, runtime: claude, instruction: "Spec", output_file: spec.md }
-`)
+    seed({
+      runtimes: [{ id: 'claude', type: 'claude-cli', command: 'claude' }],
+      global: { base_layers: [] },
+      agents: [{ id: 'spec', name: 'Spec', runtime: 'claude', instruction: 'Spec', output_file: 'spec.md' }],
+    })
     const cfg = loadAgentsConfig()
     const spec = cfg.agents.find((a) => a.id === 'spec')
     expect(spec?.outputs).toEqual([])
@@ -384,14 +394,11 @@ agents:
   })
 
   it('DB 里 inputs_json 非字符串数组 → 归一化为 []（不抛错）', () => {
-    seed(`
-runtimes:
-  - { id: claude, type: claude-cli, command: claude }
-global:
-  base_layers: []
-agents:
-  - { id: spec, name: Spec, runtime: claude, instruction: "Spec", output_file: spec.md }
-`)
+    seed({
+      runtimes: [{ id: 'claude', type: 'claude-cli', command: 'claude' }],
+      global: { base_layers: [] },
+      agents: [{ id: 'spec', name: 'Spec', runtime: 'claude', instruction: 'Spec', output_file: 'spec.md' }],
+    })
     // 直接改 DB 制造畸形数据，验证 loadAgentsConfig 不抛错
     sqlite.prepare(`UPDATE agents SET inputs_json = ?, outputs_json = ? WHERE id = ?`)
       .run('not-json', '[1, 2, 3]', 'spec')

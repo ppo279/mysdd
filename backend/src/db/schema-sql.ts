@@ -120,10 +120,10 @@ export const SCHEMA_SQL = `
       applied_at INTEGER
     );
 
-    -- Implements: .scratch/agent-contract-db/issues/02-yaml-to-db.md
-    -- 把 agents.yaml 的 runtimes / global.base_layers / agents 三段搬到 DB。
-    -- 启动期 seeder (services/agent-seed.ts) 一次性把 agents.yaml 写入；
-    -- 之后 PUT /api/config/agents 改写这三张表，agents.yaml 不再被读。
+    -- Implements: .scratch/agent-contract-db/issues/02-yaml-to-db.md, .scratch/agent-contract-db/issues/05-yaml-cleanup.md
+    -- （历史）slice 02 把 agents.yaml 的 runtimes / global.base_layers / agents 三段搬到 DB；
+    -- slice 05 删除启动期 yaml 读取路径，DB 是唯一真相之源（agent-seed.ts 仅保留 test seam）。
+    -- 写入路径只有 PUT /api/config/agents（或手工 INSERT）。
     CREATE TABLE IF NOT EXISTS base_layers (
       id          TEXT PRIMARY KEY,
       name        TEXT NOT NULL,

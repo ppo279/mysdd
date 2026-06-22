@@ -1,11 +1,12 @@
-// Implements: .scratch/agent-contract-db/issues/02-yaml-to-db.md
+// Implements: .scratch/agent-contract-db/issues/02-yaml-to-db.md, .scratch/agent-contract-db/issues/05-yaml-cleanup.md
+// （历史）slice 02 把 yaml 迁到 DB；slice 05 删除 yaml 路径。
 // 改读 DB 后行为说明：
-// - loadAgentsConfig() 不再读 agents.yaml；改为读 runtimes / base_layers / agents 三张表。
+// - loadAgentsConfig() 从 agents 表读 runtimes / base_layers / agents 三张表。
 // - 返回的对象形状仍是 AgentsYaml（runtimes / global.base_layers / agents），与之前一致；
 //   ConfigView GET 拿到的 data 直接就是 yaml 形状，前端无感。
 // - clearCache() 清掉 in-memory 缓存；调用方（routes/config.ts PUT）须额外 clearRuntimeCache()。
-// - 启动期：index.ts 先 initDb() 再 seedAgentsFromYaml()（seed 在 agents 表为空时把 yaml 写入）；
-//   loadAgentsConfig 永远在 seed 之后被调用，读到的是 DB 里的最新数据。
+// - 启动期：index.ts 先 initDb()；loadAgentsConfig 永远读到的是 DB 里的最新数据
+//   （agents 表为空也是合法状态——ConfigView PUT 或手工 INSERT 填入）。
 
 import { asc } from 'drizzle-orm'
 import { db } from '../db/index.js'

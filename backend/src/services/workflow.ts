@@ -176,13 +176,13 @@ export function toposort(graph: WorkflowGraph): string[] {
  * 失败抛 BizError；通过则静默返回。
  *  - 至少一个节点
  *  - 节点 nodeId 在 workflow 内唯一
- *  - 所有 agentId 在 agents.yaml 中存在
+ *  - 所有 agentId 在 agents 表中存在
  *  - 所有边引用的 fromNodeId / toNodeId 必须存在
  *  - 无环
  * Implements: docs/prd/0001-bug-fix-workflow.md
  * CONTEXT.md decision 9 (N2) 允许 workflow-scoped nodeId 与 agentId 不同
  * （bug-fix workflow 用 analyze/design-test/fix/audit，agent 是 bug-analyst/test-architect/code-surgeon/quality-gatekeeper）。
- * 因此取消 "nodeId === agentId" 的强制约束；保留 agentId 在 agents.yaml 中存在的校验。
+ * 因此取消 "nodeId === agentId" 的强制约束；保留 agentId 在 agents 表中存在的校验。
  */
 export function validateWorkflow(graph: WorkflowGraph): void {
   if (graph.nodes.length === 0) {
@@ -207,7 +207,7 @@ export function validateWorkflow(graph: WorkflowGraph): void {
     } catch {
       throw new BizError(
         Code.WORKFLOW_INVALID,
-        `Agent "${n.agentId}" not found in agents.yaml`,
+        `Agent "${n.agentId}" not found in agents table`,
         400,
       )
     }
