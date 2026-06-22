@@ -13,7 +13,8 @@ import { workflows, workflowNodes, workflowEdges, features } from '../db/schema.
 import { eq, and, asc } from 'drizzle-orm'
 import { randomUUID } from 'crypto'
 import { z } from 'zod'
-import { validateWorkflow, type WorkflowNodeRow, type WorkflowEdgeRow } from '../services/workflow.js'
+import { validateWorkflow, validateWorkflowPorts, rejectPortOverrideInConfigJson, type WorkflowNodeRow, type WorkflowEdgeRow } from '../services/workflow.js'
+import { getAgentConfig } from '../config/agents.js'
 import { BizError, Code, ok } from '../lib/envelope.js'
 
 // ── zod schemas ───────────────────────────────────────────────
@@ -52,23 +53,49 @@ const UpdateWorkflowSchema = z.object({
 const UpdateGraphSchema = CreateWorkflowSchema.pick({ nodes: true, edges: true })
 
 // 工具：把 zod 解析后的 DTO 转换成纯 row 喂给 validateWorkflow
-function toRows(nodes: z.infer<typeof NodeSchema>[], edges: z.infer<typeof EdgeSchema>[]): {
+// 同时把每个 node 的 configJson 喂给 rejectPortOverrideInConfigJson——
+// outputs/inputs 覆盖在 slice 03 关闭。返回的 portsByNode 是 nodeId → 端口列表的查表闭包。
+//
+// 顺序：先 validateWorkflow（拒未知 agentId / 重复 nodeId / 环 / 端点缺失）；
+// 再 rejectPortOverrideInConfigJson（拒 configJson ports 覆盖）；
+// 再 getAgentConfig 取 ports（用于 validateWorkflowPorts）。
+// 顺序保证未知 agentId 走 validateWorkflow 的 BizError 而非 getAgentConfig 的 raw Error。
+function toRows(
+  nodes: z.infer<typeof NodeSchema>[],
+  edges: z.infer<typeof EdgeSchema>[],
+): {
   nodes: WorkflowNodeRow[]
   edges: WorkflowEdgeRow[]
+  portsByNode: Map<string, { inputs: string[]; outputs: string[] }>
 } {
+  const nodeRows: WorkflowNodeRow[] = nodes.map((n) => ({
+    nodeId: n.nodeId,
+    agentId: n.agentId,
+    positionX: n.positionX,
+    positionY: n.positionY,
+  }))
+  const edgeRows: WorkflowEdgeRow[] = edges.map((e) => ({
+    fromNodeId: e.fromNodeId,
+    fromOutput: e.fromOutput,
+    toNodeId: e.toNodeId,
+    toInput: e.toInput,
+  }))
+  // 第一道：基础结构校验（拒未知 agentId、重复 nodeId、环、端点缺失）
+  validateWorkflow({ nodes: nodeRows, edges: edgeRows })
+  // 第二道：configJson 不含 ports 覆盖
+  for (const n of nodes) {
+    rejectPortOverrideInConfigJson(n.configJson, n.nodeId)
+  }
+  // 第三道：从 agent 取 ports（validateWorkflow 已保证 agentId 存在）
+  const portsByNode = new Map<string, { inputs: string[]; outputs: string[] }>()
+  for (const n of nodes) {
+    const cfg = getAgentConfig(n.agentId)
+    portsByNode.set(n.nodeId, { inputs: cfg.inputs, outputs: cfg.outputs })
+  }
   return {
-    nodes: nodes.map((n) => ({
-      nodeId: n.nodeId,
-      agentId: n.agentId,
-      positionX: n.positionX,
-      positionY: n.positionY,
-    })),
-    edges: edges.map((e) => ({
-      fromNodeId: e.fromNodeId,
-      fromOutput: e.fromOutput,
-      toNodeId: e.toNodeId,
-      toInput: e.toInput,
-    })),
+    nodes: nodeRows,
+    edges: edgeRows,
+    portsByNode,
   }
 }
 
@@ -104,8 +131,13 @@ export async function workflowRoutes(app: FastifyInstance) {
     const { workspaceId } = req.params as { workspaceId: string }
     const body = CreateWorkflowSchema.parse(req.body)
 
-    // 业务校验（通过则继续；失败抛 BizError）
-    validateWorkflow(toRows(body.nodes, body.edges))
+    // 业务校验（通过则继续；失败抛 BizError）：
+    // toRows 内部已跑 validateWorkflow + rejectPortOverrideInConfigJson + 拿 ports。
+    const rows = toRows(body.nodes, body.edges)
+    // Implements: .scratch/agent-contract-db/issues/03-workflow-port-validation.md
+    // 端口对齐：edge 的 from_output/to_input 必须 ∈ source/target agent 的声明端口；
+    // 每个 input port 必须有入边。
+    validateWorkflowPorts(rows, (nodeId) => rows.portsByNode.get(nodeId)!)
 
     const wfId = randomUUID()
     const now = new Date()
@@ -218,8 +250,11 @@ export async function workflowRoutes(app: FastifyInstance) {
     const [existing] = await db.select().from(workflows).where(eq(workflows.id, id))
     if (!existing) throw new BizError(Code.WORKFLOW_NOT_FOUND, `Workflow ${id} not found`, 404)
 
-    // 复用 create 路径的同一套校验（路线 1 锁死 + 节点/边结构 + 无环）
-    validateWorkflow(toRows(body.nodes, body.edges))
+    // 复用 create 路径的同一套校验（路线 1 锁死 + 节点/边结构 + 无环 + 端口对齐 + configJson 覆盖）
+    const rows = toRows(body.nodes, body.edges)
+    // Implements: .scratch/agent-contract-db/issues/03-workflow-port-validation.md
+    // 端口对齐 + input coverage + 拒 configJson 覆盖——和 create 路径一致。
+    validateWorkflowPorts(rows, (nodeId) => rows.portsByNode.get(nodeId)!)
 
     const now = new Date()
     // better-sqlite3 的 transaction 是同步的——callback 不能是 async，也不能 await。

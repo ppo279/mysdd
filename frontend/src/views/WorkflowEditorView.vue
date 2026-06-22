@@ -50,7 +50,7 @@ import '@vue-flow/core/dist/theme-default.css'
 import '@vue-flow/controls/dist/style.css'
 import '@vue-flow/minimap/dist/style.css'
 import {
-  NSpin, NSpace, NButton, NInput, NCard, NSelect, NModal, NEmpty, NTag,
+  NSpin, NSpace, NButton, NInput, NCard, NSelect, NModal, NEmpty, NTag, NAlert,
   useMessage,
 } from 'naive-ui'
 import { api, type WorkflowCreateInput, type WorkflowDetail } from '@/api'
@@ -77,47 +77,43 @@ const saving = ref(false)
 const showAddNode = ref(false)
 const newNodeAgent = ref<string | null>(null)
 const newNodeDisplayName = ref('')
-const newNodeOutputs = ref<string[]>(['default'])
-const newNodeInputs = ref<string[]>(['default'])
+const newNodeOutputs = ref<string[]>([])
+const newNodeInputs = ref<string[]>([])
+// Implements: .scratch/agent-contract-db/issues/03-workflow-port-validation.md
+// 老 workflow 可能含 workflow_nodes.config_json.outputs/inputs 覆盖——
+// 打开时显示 banner 提示用户清理。检测在 loadDetail() 里。
+const hasLegacyOverride = ref(false)
 
 watch(newNodeAgent, (val) => {
   if (!val) return
   const found = agents.value.find((a) => a.value === val)
   if (found) {
     newNodeDisplayName.value = found.label.split(' (')[0] ?? found.label
-    newNodeOutputs.value = found.outputs.length > 0 ? found.outputs : ['default']
-    newNodeInputs.value = found.inputs.length > 0 ? found.inputs : ['default']
+    // ports 永远从 agent config 取（slice 03 起 agent 是真相之源）
+    newNodeOutputs.value = found.outputs
+    newNodeInputs.value = found.inputs
   }
 })
 
 const { onConnect, screenToFlowCoordinate, onNodeDoubleClick } = useVueFlow()
 
 // ─── 双击编辑节点 ───────────────────────────────────────
+// slice 03 起：inputs/outputs 不再可编辑——port 是 agent 级真相，
+// 改 ports 要去 /config 页改 agent config。这里只编辑 displayName。
 const showEditNode = ref(false)
 const editingNodeId = ref('')
 const editNodeDisplayName = ref('')
-const editNodeOutputsInput = ref('')
-const editNodeInputsInput = ref('')
 
 onNodeDoubleClick(({ node }) => {
   editingNodeId.value = node.id
   editNodeDisplayName.value = (node.data as any)?.label || node.id
-  editNodeOutputsInput.value = ((node.data as any)?.outputs ?? ['default']).join(', ')
-  editNodeInputsInput.value = ((node.data as any)?.inputs ?? ['default']).join(', ')
   showEditNode.value = true
 })
 
-function parseHandleList(raw: string): string[] {
-  const arr = raw.split(',').map((s) => s.trim()).filter(Boolean)
-  return arr.length > 0 ? arr : ['default']
-}
-
 function confirmEditNode() {
-  const outputs = parseHandleList(editNodeOutputsInput.value)
-  const inputs = parseHandleList(editNodeInputsInput.value)
   nodes.value = nodes.value.map((n) =>
     n.id === editingNodeId.value
-      ? { ...n, data: { ...(n.data as any), label: editNodeDisplayName.value || n.id, outputs, inputs } }
+      ? { ...n, data: { ...(n.data as any), label: editNodeDisplayName.value || n.id } }
       : n,
   )
   showEditNode.value = false
@@ -157,13 +153,15 @@ function parseInput(handleId?: string | null): string {
 async function loadAgents() {
   try {
     const cfg = await api.config.agents()
+    // slice 03 起：直接用 a.outputs / a.inputs——后端保证这俩字段永远是 string[]
+    // （issue 02 的 DB schema + issue 03 的 loadAgentsConfig 归一化）。
+    // 不再做 fallback chain（a.output_file）——老 fallback 链会绕过端口契约。
+    // 注意：空数组是合法的（如 spec 入口节点无 inputs）——保留原样，不要 fallback 到 ['default']。
     agents.value = cfg.agents.map((a) => ({
       label: `${a.name} (${a.id})`,
       value: a.id,
-      outputs: a.outputs && a.outputs.length > 0
-        ? a.outputs
-        : a.output_file ? [a.output_file] : ['default'],
-      inputs: a.inputs && a.inputs.length > 0 ? a.inputs : ['default'],
+      outputs: a.outputs ?? ['default'],
+      inputs: a.inputs ?? ['default'],
     }))
     const firstAgent = agents.value[0]
     if (firstAgent) {
@@ -180,6 +178,7 @@ async function loadDetail() {
   if (isNew.value) {
     nodes.value = []
     edges.value = []
+    hasLegacyOverride.value = false
     return
   }
   loading.value = true
@@ -187,15 +186,29 @@ async function loadDetail() {
     const detail: WorkflowDetail = await store.loadOne(workflowId.value)
     name.value = detail.name
     description.value = detail.description
+    // Implements: .scratch/agent-contract-db/issues/03-workflow-port-validation.md
+    // 打开老 workflow 时扫一遍 configJson，若有 outputs/inputs 键就显示 banner。
+    // 这些 override 在保存时会被服务端拒（route handler 抛 400），
+    // 用户必须先手动清掉——前端 banner 提示这一步。
+    let legacyOverride = false
     nodes.value = detail.nodes.map<WorkflowNodeLike>((n) => {
-      // 从 configJson 恢复 outputs / inputs（不存在时各 fallback 到 ['default']）
-      let outputs: string[] = ['default']
-      let inputs: string[] = ['default']
+      // slice 03 起：节点的 outputs/inputs 不再从 configJson 恢复——一律从 agent config 取。
+      // 老的 configJson.outputs/inputs 仅作为"待清理标记"。
+      let outputs: string[] = []
+      let inputs: string[] = []
       try {
         const cfg = n.configJson ? JSON.parse(n.configJson) : {}
-        if (Array.isArray(cfg.outputs) && cfg.outputs.length > 0) outputs = cfg.outputs
-        if (Array.isArray(cfg.inputs) && cfg.inputs.length > 0) inputs = cfg.inputs
+        if (cfg && typeof cfg === 'object') {
+          if ('outputs' in cfg || 'inputs' in cfg) legacyOverride = true
+        }
       } catch { /* configJson 非法时静默 */ }
+      // ports 从 agents 列表取；若 agent 还没加载完（loadAgents 慢于 loadDetail），
+      // 此时 outputs/inputs 留空——watcher on agents 会在 agents 加载完成后重对齐。
+      const agent = agents.value.find((a) => a.value === n.agentId)
+      if (agent) {
+        outputs = agent.outputs
+        inputs = agent.inputs
+      }
       return {
         id: n.nodeId,
         type: 'agent',
@@ -203,6 +216,7 @@ async function loadDetail() {
         data: { agentId: n.agentId, label: n.displayName || n.nodeId, outputs, inputs },
       }
     })
+    hasLegacyOverride.value = legacyOverride
     edges.value = detail.edges.map<WorkflowEdgeLike>((e) => ({
       id: `e-${e.fromNodeId}-${e.fromOutput}->${e.toNodeId}-${e.toInput}`,
       source: e.fromNodeId,
@@ -226,12 +240,22 @@ onMounted(async () => {
   await loadDetail()
 })
 watch(workflowId, loadDetail)
+// agents 异步加载完成后，把已存在的 nodes 的 outputs/inputs 重新对齐到 agent 配置。
+// （loadDetail 可能早于 loadAgents 完成，那时 agent 列表还是空。）
+watch(agents, (val) => {
+  if (val.length === 0) return
+  nodes.value = nodes.value.map((n) => {
+    const a = val.find((x) => x.value === (n.data as any)?.agentId)
+    if (!a) return n
+    return { ...n, data: { ...(n.data as any), outputs: a.outputs, inputs: a.inputs } }
+  })
+})
 
 function openAddNode() {
   const first = agents.value[0] ?? null
   newNodeAgent.value = first?.value ?? null
-  newNodeOutputs.value = first?.outputs ?? ['default']
-  newNodeInputs.value = first?.inputs ?? ['default']
+  newNodeOutputs.value = first?.outputs ?? []
+  newNodeInputs.value = first?.inputs ?? []
   newNodeDisplayName.value = first ? (first.label.split(' (')[0] ?? first.label) : ''
   showAddNode.value = true
 }
@@ -248,8 +272,10 @@ function confirmAddNode() {
     message.error(`agent "${nodeId}" 已被占用`)
     return
   }
-  const outputs = newNodeOutputs.value.length > 0 ? newNodeOutputs.value : ['default']
-  const inputs = newNodeInputs.value.length > 0 ? newNodeInputs.value : ['default']
+  // slice 03 起：ports 永远从 agent config 取（newNodeOutputs/Inputs 由 watch(newNodeAgent) 派生）。
+  // 空数组是合法的（如 spec 入口节点无 inputs）——保留原样，不要 fallback 到 ['default']。
+  const outputs = newNodeOutputs.value
+  const inputs = newNodeInputs.value
 
   const pos = screenToFlowCoordinate({ x: window.innerWidth / 2 - 100, y: window.innerHeight / 2 - 50 })
   const displayName = newNodeDisplayName.value.trim() || nodeId
@@ -311,6 +337,42 @@ function validateLocal(): { ok: boolean; cycle?: string[]; error?: string } {
   const cycle = detectCycles(nodeRows, edgeRows)
   if (cycle) return { ok: false, cycle }
   if (nodes.value.length === 0) return { ok: false, cycle: ['(empty)'] }
+
+  // Implements: .scratch/agent-contract-db/issues/03-workflow-port-validation.md
+  // 前端 client-side mirror 校验：与后端 routes/workflows.ts 的
+  // validateWorkflowPorts + rejectPortOverrideInConfigJson 镜像。
+  // 服务端是 source of truth；这里只是减少无意义的请求和让用户立刻看到错误。
+  const nodeById = new Map(nodes.value.map((n) => [n.id, n]))
+  for (const e of edgeRows) {
+    const src = nodeById.get(e.fromNodeId)
+    const tgt = nodeById.get(e.toNodeId)
+    if (!src || !tgt) continue
+    const srcOutputs: string[] = (src.data as any)?.outputs ?? []
+    if (!srcOutputs.includes(e.fromOutput)) {
+      return { ok: false, error: `边 "${e.fromNodeId}" → "${e.toNodeId}" 用了源 agent 没声明的输出 "${e.fromOutput}"（声明：${srcOutputs.join(', ') || '无'}）` }
+    }
+    const tgtInputs: string[] = (tgt.data as any)?.inputs ?? []
+    if (!tgtInputs.includes(e.toInput)) {
+      return { ok: false, error: `边 "${e.fromNodeId}" → "${e.toNodeId}" 用了目标 agent 没声明的输入 "${e.toInput}"（声明：${tgtInputs.join(', ') || '无'}）` }
+    }
+  }
+  // Input coverage
+  for (const n of nodes.value) {
+    const inputs: string[] = (n.data as any)?.inputs ?? []
+    if (inputs.length === 0) continue
+    const incomingByInput = new Map<string, number>()
+    for (const e of edges.value) {
+      if (e.target !== n.id) continue
+      const key = parseInput(e.targetHandle)
+      incomingByInput.set(key, (incomingByInput.get(key) ?? 0) + 1)
+    }
+    for (const input of inputs) {
+      if ((incomingByInput.get(input) ?? 0) === 0) {
+        return { ok: false, error: `节点 "${n.id}" 的输入 "${input}" 缺少入边（agent config 已声明该输入端口）` }
+      }
+    }
+  }
+
   return { ok: true }
 }
 
@@ -324,11 +386,10 @@ function toDto(): WorkflowCreateInput {
       positionX: n.position.x,
       positionY: n.position.y,
       displayName: (n.data as any)?.label || n.id,
-      // outputs/inputs 存入 configJson，加载时反序列化还原多 handle
-      configJson: JSON.stringify({
-        outputs: (n.data as any)?.outputs ?? ['default'],
-        inputs: (n.data as any)?.inputs ?? ['default'],
-      }),
+      // slice 03 起：不再把 outputs/inputs 写进 configJson——这些字段已被
+      // 后端拒收（rejectPortOverrideInConfigJson）。configJson 只放合法的
+      // per-node 字段（目前没有；将来 per-node runtime config 落这里）。
+      configJson: '{}',
     })),
     edges: edges.value.map((e) => ({
       fromNodeId: e.source,
@@ -398,6 +459,19 @@ const nodeTypes = { agent: AgentNode as any }
       </NSpace>
     </header>
 
+    <!-- 老 workflow 含有 configJson.outputs/inputs 覆盖时显示——提示用户清理 -->
+    <!-- 后续若不清，保存时后端会 400 拒收（rejectPortOverrideInConfigJson） -->
+    <NAlert
+      v-if="hasLegacyOverride"
+      type="warning"
+      title="节点级 ports 覆盖已废弃"
+      style="margin: 12px 16px 0;"
+      :show-icon="true"
+    >
+      此 workflow 的 workflow_nodes.config_json 含 <code>outputs</code> / <code>inputs</code> 键——agent 配置才是 ports 的唯一真相之源。
+      在保存前请手工清理这些字段，否则保存会被服务端拒绝。
+    </NAlert>
+
     <div class="workflow-editor__canvas">
       <NSpin :show="loading">
         <VueFlow
@@ -427,23 +501,16 @@ const nodeTypes = { agent: AgentNode as any }
     </div>
 
     <!-- 双击编辑节点弹窗 -->
+    <!-- slice 03 起：inputs/outputs 不再可编辑——port 是 agent 级真相 -->
     <NModal v-model:show="showEditNode" preset="card" title="编辑节点" style="width: 440px">
       <NSpace vertical :size="14">
         <div>
           <div style="margin-bottom: 4px; font-size: 12px; color: #666">显示名称</div>
           <NInput v-model:value="editNodeDisplayName" placeholder="例如 写规格 / 出方案" />
         </div>
-        <div>
-          <div style="margin-bottom: 4px; font-size: 12px; color: #666">
-            输出 handle（逗号分隔）— 对应右侧连线接口
-          </div>
-          <NInput v-model:value="editNodeOutputsInput" placeholder="如 spec.md 或 code, tests" />
-        </div>
-        <div>
-          <div style="margin-bottom: 4px; font-size: 12px; color: #666">
-            输入 handle（逗号分隔）— 对应左侧连线接口
-          </div>
-          <NInput v-model:value="editNodeInputsInput" placeholder="如 default 或 spec.md, plan.md" />
+        <div style="font-size: 11px; color: #aaa;">
+          inputs / outputs 来自 agent 配置，去
+          <a href="/config" target="_blank" style="color: #6366f1;">Agent 配置</a> 改。
         </div>
         <NSpace justify="end">
           <NButton @click="showEditNode = false">取消</NButton>

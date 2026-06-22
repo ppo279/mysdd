@@ -30,14 +30,24 @@ export interface AgentRuntimeConfig {
   disallowedTools?: string
 }
 
-// 注意：本 slice 内 `AgentConfig` 接口**不动**——
-// inputs/outputs 字段在 issue 03 才加（PRD 实现决策）。本 slice 只搬数据，不改契约。
+// Implements: .scratch/agent-contract-db/issues/03-workflow-port-validation.md
+// slice 03 起：`AgentConfig` 接口新增 `inputs` / `outputs` 字段。
+// - 形状固定 `string[]`；DB 存为 JSON 文本（agents.inputs_json / outputs_json）。
+// - 缺省 `['default']`：单输出/单输入节点无需填字段。
+// - 这两个字段是 workflow 端口校验的真相之源（routes/workflows.ts 的 PATCH /:id/graph
+//   用 `target_node.agent.inputs` 校验 `edge.to_input`、用 `source_node.agent.outputs`
+//   校验 `edge.from_output`）。
 export interface AgentConfig {
   id: string
   name: string
   runtime: string
   instruction: string
   outputFile: string
+  // Implements: .scratch/agent-contract-db/issues/03-workflow-port-validation.md
+  /** 声明的输入 handle 名字列表。运行时通过 workflow_edges.to_input 对齐。 */
+  inputs: string[]
+  /** 声明的输出 handle 名字列表。运行时通过 workflow_edges.from_output 对齐。 */
+  outputs: string[]
   // Implements: spec.md#BI-07 / plan.md#D-03 / tasks.md#T008
   // DB agents.memory_sediment（0/1）；缺省 false，仅 true 允许写 memory/.draft/
   memory_sediment?: boolean
@@ -67,6 +77,19 @@ export interface AgentsYaml {
 }
 
 let _config: AgentsYaml | null = null
+
+// Implements: .scratch/agent-contract-db/issues/03-workflow-port-validation.md
+// 严格解析：JSON.parse 失败、非数组、或含任何非字符串元素都返回 null
+// 让调用方归一化为 ['default']。这与 routes/config.ts PUT 写的形状对齐
+// （PUT 写入 JSON.stringify(['default']) 或 JSON.stringify(string[])）。
+// 这里不用 zod 是因为单测时希望解析失败静默归一化，而不是抛错把 loadAgentsConfig 整个搞挂。
+function parseStringArray(raw: string): string[] | null {
+  let parsed: unknown
+  try { parsed = JSON.parse(raw) } catch { return null }
+  if (!Array.isArray(parsed)) return null
+  for (const x of parsed) if (typeof x !== 'string') return null
+  return parsed as string[]
+}
 
 export function clearCache() {
   _config = null
@@ -100,6 +123,11 @@ export function loadAgentsConfig(): AgentsYaml {
           cfg = parsed as AgentRuntimeConfig
         }
       } catch { /* malformed json → leave cfg undefined */ }
+      // Implements: .scratch/agent-contract-db/issues/03-workflow-port-validation.md
+      // DB 存的 inputs_json / outputs_json 是 JSON 文本；解析失败或非字符串数组时
+      // 归一化为 ['default']——保留旧契约语义（无字段时单 port）。
+      const inputs = parseStringArray(a.inputsJson) ?? ['default']
+      const outputs = parseStringArray(a.outputsJson) ?? ['default']
       return {
         id: a.id,
         name: a.name,
@@ -108,6 +136,8 @@ export function loadAgentsConfig(): AgentsYaml {
         // outputFile 字段：DB 不存——保留旧 yaml 形状，置空串。
         // 已有调用方（services/agent.ts 等）通过 agent.id 拿产物，不依赖此字段。
         outputFile: '',
+        inputs,
+        outputs,
         memory_sediment: a.memorySediment === 1,
         config: cfg,
       }

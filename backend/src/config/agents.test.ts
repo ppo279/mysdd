@@ -308,3 +308,56 @@ agents:
     expect(() => agentsModule.getAgentConfig('does-not-exist')).toThrow(/not found/i)
   })
 })
+
+// ============== slice 03: AgentConfig.inputs / outputs 解析 ==============
+
+describe('slice 03: AgentConfig.inputs / outputs 解析', () => {
+  it('yaml 含 outputs / inputs → loadAgentsConfig 反序列化为 string[]', () => {
+    seed(`
+runtimes:
+  - { id: claude, type: claude-cli, command: claude }
+global:
+  base_layers: []
+agents:
+  - { id: spec, name: Spec, runtime: claude, instruction: "Spec", output_file: spec.md, outputs: [spec.md, summary.md], inputs: [context.md, brief.md] }
+`)
+    const cfg = loadAgentsConfig()
+    const spec = cfg.agents.find((a) => a.id === 'spec')
+    expect(spec?.outputs).toEqual(['spec.md', 'summary.md'])
+    expect(spec?.inputs).toEqual(['context.md', 'brief.md'])
+  })
+
+  it('yaml 不填 outputs / inputs → 归一化为 ["default"]', () => {
+    seed(`
+runtimes:
+  - { id: claude, type: claude-cli, command: claude }
+global:
+  base_layers: []
+agents:
+  - { id: spec, name: Spec, runtime: claude, instruction: "Spec", output_file: spec.md }
+`)
+    const cfg = loadAgentsConfig()
+    const spec = cfg.agents.find((a) => a.id === 'spec')
+    expect(spec?.outputs).toEqual(['default'])
+    expect(spec?.inputs).toEqual(['default'])
+  })
+
+  it('DB 里 inputs_json 非字符串数组 → 归一化为 ["default"]（不抛错）', () => {
+    seed(`
+runtimes:
+  - { id: claude, type: claude-cli, command: claude }
+global:
+  base_layers: []
+agents:
+  - { id: spec, name: Spec, runtime: claude, instruction: "Spec", output_file: spec.md }
+`)
+    // 直接改 DB 制造畸形数据，验证 loadAgentsConfig 不抛错
+    sqlite.prepare(`UPDATE agents SET inputs_json = ?, outputs_json = ? WHERE id = ?`)
+      .run('not-json', '[1, 2, 3]', 'spec')
+    clearCache()
+    const cfg = loadAgentsConfig()
+    const spec = cfg.agents.find((a) => a.id === 'spec')
+    expect(spec?.inputs).toEqual(['default'])     // 解析失败 → fallback
+    expect(spec?.outputs).toEqual(['default'])    // 非字符串数组 → fallback
+  })
+})

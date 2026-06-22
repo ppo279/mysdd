@@ -240,6 +240,100 @@ export function validateWorkflow(graph: WorkflowGraph): void {
   }
 }
 
+/**
+ * Implements: .scratch/agent-contract-db/issues/03-workflow-port-validation.md
+ * 端口校验：edge 的 from_output / to_input 必须分别 ∈ source/target agent 的
+ * declared outputs/inputs；每个 input port 都必须至少有 1 条入边。
+ *
+ * 失败抛 BizError(WORKFLOW_INVALID)；通过则静默返回。
+ *
+ * 这是路线 1 之外加的第二层校验：路线 1 锁死 nodeId === agentId，因此每个 node
+ * 唯一对应一个 agent；校验每个 node 的 agent.inputs / agent.outputs 即可。
+ *
+ * 注意：本函数不查 node 拓扑，只查"端口名集合 ⊆ 声明集合"和"每个 input 有入边"。
+ * 已用 validateWorkflow 检查过基本结构（节点唯一、agentId 存在、无环）。
+ */
+export function validateWorkflowPorts(
+  graph: WorkflowGraph,
+  // 节点 → agent 端口列表的查表函数。接收 nodeId 而不是 agentId 是为了避免
+  // 再次查 getAgentConfig 时多走一层（节点已 unique，无需再取 agent）。
+  getPorts: (nodeId: string) => { inputs: string[]; outputs: string[] },
+): void {
+  const nodeIds = new Set(graph.nodes.map((n) => n.nodeId))
+
+  for (const e of graph.edges) {
+    if (!nodeIds.has(e.fromNodeId) || !nodeIds.has(e.toNodeId)) {
+      // 这条路径在 validateWorkflow 已被拦截——若走到这里说明调用方漏了基础校验
+      throw new BizError(
+        Code.WORKFLOW_INVALID,
+        `Edge references unknown endpoint: "${e.fromNodeId}" -> "${e.toNodeId}"`,
+        400,
+      )
+    }
+    const src = getPorts(e.fromNodeId)
+    if (!src.outputs.includes(e.fromOutput)) {
+      throw new BizError(
+        Code.WORKFLOW_INVALID,
+        `Edge from "${e.fromNodeId}" uses output "${e.fromOutput}" not declared by agent (declared: [${src.outputs.join(', ')}])`,
+        400,
+      )
+    }
+    const tgt = getPorts(e.toNodeId)
+    if (!tgt.inputs.includes(e.toInput)) {
+      throw new BizError(
+        Code.WORKFLOW_INVALID,
+        `Edge to "${e.toNodeId}" uses input "${e.toInput}" not declared by agent (declared: [${tgt.inputs.join(', ')}])`,
+        400,
+      )
+    }
+  }
+
+  // Input coverage：每个 node 的每个 input port 都必须有 ≥1 条入边
+  // 隐含假设：node 自身没法自行产出自己的 input 内容——必须有上游喂进来。
+  for (const n of graph.nodes) {
+    const ports = getPorts(n.nodeId)
+    const incomingByInput = new Map<string, number>()
+    for (const e of graph.edges) {
+      if (e.toNodeId !== n.nodeId) continue
+      incomingByInput.set(e.toInput, (incomingByInput.get(e.toInput) ?? 0) + 1)
+    }
+    for (const input of ports.inputs) {
+      if ((incomingByInput.get(input) ?? 0) === 0) {
+        throw new BizError(
+          Code.WORKFLOW_INVALID,
+          `Node "${n.nodeId}" input "${input}" has no incoming edge`,
+          400,
+        )
+      }
+    }
+  }
+}
+
+/**
+ * Implements: .scratch/agent-contract-db/issues/03-workflow-port-validation.md
+ * configJson override 守卫：workflow_nodes.config_json 是 workflow 级覆盖，
+ * 但 ports（outputs/inputs）的覆盖已被废弃——agent.config 是唯一真相之源。
+ *
+ * 校验：传入 configJson 字符串里若含 `outputs` 或 `inputs` 键 → 抛 BizError。
+ * 其它字段（如 displayName、position 等）合法保留。
+ */
+export function rejectPortOverrideInConfigJson(
+  configJson: string,
+  nodeId: string,
+): void {
+  let parsed: unknown
+  try { parsed = JSON.parse(configJson) } catch { return /* 非 JSON 不在本守卫范围 */ }
+  if (!parsed || typeof parsed !== 'object') return
+  const obj = parsed as Record<string, unknown>
+  if ('outputs' in obj || 'inputs' in obj) {
+    throw new BizError(
+      Code.WORKFLOW_INVALID,
+      `Node "${nodeId}" config_json contains "outputs" or "inputs" override; per-node port overrides are deprecated. Edit the agent's ports instead.`,
+      400,
+    )
+  }
+}
+
 /** 返回进入 nodeId 的所有边（包含 fromOutput / toInput 信息）。 */
 export function getIncomingEdges(graph: WorkflowGraph, nodeId: string): WorkflowEdgeRow[] {
   return graph.edges.filter((e) => e.toNodeId === nodeId)
