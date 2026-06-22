@@ -213,7 +213,10 @@ async function loadDetail() {
         id: n.nodeId,
         type: 'agent',
         position: { x: n.positionX, y: n.positionY },
-        data: { agentId: n.agentId, label: n.displayName || n.nodeId, outputs, inputs },
+        // slice 07: 把原始 configJson 也存到 data 里——validateLocal 镜像
+        // rejectPortOverrideInConfigJson 时需要它（前端在保存前就能拒，不再
+        // 把脏 configJson 推给后端 400）。
+        data: { agentId: n.agentId, label: n.displayName || n.nodeId, outputs, inputs, configJson: n.configJson },
       }
     })
     hasLegacyOverride.value = legacyOverride
@@ -303,24 +306,17 @@ function removeSelected() {
 }
 
 function validateLocal(): { ok: boolean; cycle?: string[]; error?: string } {
-  // 路线 1 锁死：nodeId === agentId + 节点必须有 agent 引用
+  // 与后端 routes/workflows.ts 的 validateWorkflow + validateWorkflowPorts +
+  // rejectPortOverrideInConfigJson 镜像。CONTEXT.md N2 允许：
+  //   - nodeId !== agentId（如 bug-fix workflow 的 analyze/design-test/fix/audit
+  //     对应 bug-analyst/test-architect/code-surgeon/quality-gatekeeper）
+  //   - 同一 agent 在 workflow 内出现多次
+  // 因此前端不再强制这两条。后端是 source of truth；前端 mirror 只为减少无意义请求。
   for (const n of nodes.value) {
     const agentId = (n.data as any)?.agentId as string | undefined
     if (!agentId) {
       return { ok: false, error: `节点 "${n.id}" 缺少 agent 引用` }
     }
-    if (n.id !== agentId) {
-      return { ok: false, error: `节点 "${n.id}" 与 agent "${agentId}" 不一致（路线 1 锁死）` }
-    }
-  }
-  // 唯一性：agentId 在 workflow 内不重复（路线 1 下等价于 nodeId 唯一）
-  const agentIds = new Set<string>()
-  for (const n of nodes.value) {
-    const agentId = (n.data as any).agentId as string
-    if (agentIds.has(agentId)) {
-      return { ok: false, error: `agent "${agentId}" 在 workflow 中重复出现` }
-    }
-    agentIds.add(agentId)
   }
   const nodeRows: WorkflowNodeRow[] = nodes.value.map((n) => ({
     nodeId: n.id,
@@ -369,6 +365,25 @@ function validateLocal(): { ok: boolean; cycle?: string[]; error?: string } {
     for (const input of inputs) {
       if ((incomingByInput.get(input) ?? 0) === 0) {
         return { ok: false, error: `节点 "${n.id}" 的输入 "${input}" 缺少入边（agent config 已声明该输入端口）` }
+      }
+    }
+  }
+
+  // Implements: .scratch/agent-contract-db/issues/07-port-contract-semantics.md
+  // configJson 端口覆盖守卫：与后端 rejectPortOverrideInConfigJson 镜像。
+  // toDto() 现在写 '{}'——正常路径不会触发——但若用户未来开放 node edit 让
+  // 改 configJson，前端先把关，不把脏数据推给后端再 400。
+  for (const n of nodes.value) {
+    const raw = (n.data as any)?.configJson
+    if (typeof raw !== 'string' || raw.trim() === '' || raw.trim() === '{}') continue
+    let parsed: unknown
+    try { parsed = JSON.parse(raw) } catch { continue }
+    if (!parsed || typeof parsed !== 'object') continue
+    const obj = parsed as Record<string, unknown>
+    if ('outputs' in obj || 'inputs' in obj) {
+      return {
+        ok: false,
+        error: `节点 "${n.id}" configJson 含 "outputs" 或 "inputs" 键（节点级 ports 覆盖已废弃，请修改 agent 配置）`,
       }
     }
   }

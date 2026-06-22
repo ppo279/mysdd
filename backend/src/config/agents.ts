@@ -33,7 +33,8 @@ export interface AgentRuntimeConfig {
 // Implements: .scratch/agent-contract-db/issues/03-workflow-port-validation.md
 // slice 03 起：`AgentConfig` 接口新增 `inputs` / `outputs` 字段。
 // - 形状固定 `string[]`；DB 存为 JSON 文本（agents.inputs_json / outputs_json）。
-// - 缺省 `['default']`：单输出/单输入节点无需填字段。
+// - 缺省 `[]`（slice 07 起；之前是 `['default']`，但与端口契约语义冲突——
+//   缺省应当表示"agent 没声明任何 port"，而不是"agent 有一个 default port"）。
 // - 这两个字段是 workflow 端口校验的真相之源（routes/workflows.ts 的 PATCH /:id/graph
 //   用 `target_node.agent.inputs` 校验 `edge.to_input`、用 `source_node.agent.outputs`
 //   校验 `edge.from_output`）。
@@ -79,9 +80,10 @@ export interface AgentsYaml {
 let _config: AgentsYaml | null = null
 
 // Implements: .scratch/agent-contract-db/issues/03-workflow-port-validation.md
-// 严格解析：JSON.parse 失败、非数组、或含任何非字符串元素都返回 null
-// 让调用方归一化为 ['default']。这与 routes/config.ts PUT 写的形状对齐
-// （PUT 写入 JSON.stringify(['default']) 或 JSON.stringify(string[])）。
+// (slice 07: 缺省归一化从 ['default'] 改为 []，理由见 issue 07 顶部)
+// 严格解析：JSON.parse 失败、非数组、或含任何非字符串元素都返回 null，
+// 让调用方归一化为 []。这与 routes/config.ts PUT 写的形状对齐
+// （PUT 写入 JSON.stringify([]) 或 JSON.stringify(string[])）。
 // 这里不用 zod 是因为单测时希望解析失败静默归一化，而不是抛错把 loadAgentsConfig 整个搞挂。
 function parseStringArray(raw: string): string[] | null {
   let parsed: unknown
@@ -124,10 +126,11 @@ export function loadAgentsConfig(): AgentsYaml {
         }
       } catch { /* malformed json → leave cfg undefined */ }
       // Implements: .scratch/agent-contract-db/issues/03-workflow-port-validation.md
+      // (slice 07: 缺省归一化从 ['default'] 改为 [])
       // DB 存的 inputs_json / outputs_json 是 JSON 文本；解析失败或非字符串数组时
-      // 归一化为 ['default']——保留旧契约语义（无字段时单 port）。
-      const inputs = parseStringArray(a.inputsJson) ?? ['default']
-      const outputs = parseStringArray(a.outputsJson) ?? ['default']
+      // 归一化为 []——"缺省 = agent 没声明任何 port" 的语义。
+      const inputs = parseStringArray(a.inputsJson) ?? []
+      const outputs = parseStringArray(a.outputsJson) ?? []
       return {
         id: a.id,
         name: a.name,

@@ -310,6 +310,10 @@ agents:
 })
 
 // ============== slice 03: AgentConfig.inputs / outputs 解析 ==============
+// (slice 07: 缺省归一化从 ['default'] 改为 [] —
+//  端口契约语义：缺省 = "agent 没声明任何 port"，而不是 "agent 有一个 default port"。
+//  这样后端能区分"spec 入口节点无 inputs"与"plan 有 default input"，
+//  validateWorkflowPorts 的输入覆盖校验才不会把入口节点当成缺边的违规节点。)
 
 describe('slice 03: AgentConfig.inputs / outputs 解析', () => {
   it('yaml 含 outputs / inputs → loadAgentsConfig 反序列化为 string[]', () => {
@@ -327,7 +331,7 @@ agents:
     expect(spec?.inputs).toEqual(['context.md', 'brief.md'])
   })
 
-  it('yaml 不填 outputs / inputs → 归一化为 ["default"]', () => {
+  it('yaml 不填 outputs / inputs → 归一化为 []（空数组 = 没声明）', () => {
     seed(`
 runtimes:
   - { id: claude, type: claude-cli, command: claude }
@@ -338,11 +342,11 @@ agents:
 `)
     const cfg = loadAgentsConfig()
     const spec = cfg.agents.find((a) => a.id === 'spec')
-    expect(spec?.outputs).toEqual(['default'])
-    expect(spec?.inputs).toEqual(['default'])
+    expect(spec?.outputs).toEqual([])
+    expect(spec?.inputs).toEqual([])
   })
 
-  it('DB 里 inputs_json 非字符串数组 → 归一化为 ["default"]（不抛错）', () => {
+  it('DB 里 inputs_json 非字符串数组 → 归一化为 []（不抛错）', () => {
     seed(`
 runtimes:
   - { id: claude, type: claude-cli, command: claude }
@@ -357,7 +361,7 @@ agents:
     clearCache()
     const cfg = loadAgentsConfig()
     const spec = cfg.agents.find((a) => a.id === 'spec')
-    expect(spec?.inputs).toEqual(['default'])     // 解析失败 → fallback
-    expect(spec?.outputs).toEqual(['default'])    // 非字符串数组 → fallback
+    expect(spec?.inputs).toEqual([])     // 解析失败 → fallback
+    expect(spec?.outputs).toEqual([])    // 非字符串数组 → fallback
   })
 })

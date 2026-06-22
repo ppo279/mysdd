@@ -45,7 +45,9 @@ const makeDetail = (overrides: Partial<WorkflowDetail> = {}): WorkflowDetail => 
   nodes: [
     {
       nodeId: 'spec', agentId: 'spec', positionX: 0, positionY: 0,
-      configJson: '{"outputs":["default"],"inputs":["default"]}',
+      // slice 07: 默认 fixture 用 '{}'——validateLocal 镜像 configJson 守卫，
+      // 老形状（带 outputs/inputs 键）的 fixture 留给"老 workflow 显示 banner"测试。
+      configJson: '{}',
       displayName: 'spec',
     },
   ],
@@ -209,6 +211,63 @@ describe('WorkflowEditorView — slice 03 端口契约', () => {
     // NAlert 标题里含"节点级 ports 覆盖已废弃"
     const html = wrapper.html()
     expect(html).toContain('节点级 ports 覆盖已废弃')
+  })
+
+  // Implements: .scratch/agent-contract-db/issues/06-frontend-mirror-n2.md
+  // CONTEXT.md N2 / ADR-0001：nodeId !== agentId 是合法形态（如 bug-fix workflow
+  // 的 analyze/design-test/fix/audit 对应 bug-analyst/test-architect/...）。
+  // validateLocal 不再拒这种形态——只跟端口契约（port 对齐 + 输入覆盖）走。
+  it('nodeId !== agentId 不再被 validateLocal 拒', async () => {
+    const detail = makeDetail({
+      nodes: [
+        { nodeId: 'analyze', agentId: 'bug-analyst', positionX: 0, positionY: 0,
+          configJson: '{}', displayName: 'analyze' },
+      ],
+    })
+    const wrapper = await mountEditorWithAgents(detail, [
+      { id: 'bug-analyst', name: 'Bug Analyst', runtime: 'claude', instruction: '', output_file: '',
+        outputs: ['default'], inputs: [] },
+    ])
+    const vm = wrapper.findComponent(WorkflowEditorView).vm as any
+    const v = vm.validateLocal()
+    expect(v.ok).toBe(true)
+  })
+
+  it('同一 agent 在 workflow 内多次出现不再被 validateLocal 拒', async () => {
+    const detail = makeDetail({
+      nodes: [
+        { nodeId: 'fix-1', agentId: 'code-surgeon', positionX: 0, positionY: 0,
+          configJson: '{}', displayName: 'fix-1' },
+        { nodeId: 'fix-2', agentId: 'code-surgeon', positionX: 200, positionY: 0,
+          configJson: '{}', displayName: 'fix-2' },
+      ],
+    })
+    const wrapper = await mountEditorWithAgents(detail, [
+      { id: 'code-surgeon', name: 'Code Surgeon', runtime: 'claude', instruction: '', output_file: '',
+        outputs: ['default'], inputs: [] },
+    ])
+    const vm = wrapper.findComponent(WorkflowEditorView).vm as any
+    const v = vm.validateLocal()
+    expect(v.ok).toBe(true)
+  })
+
+  // Implements: .scratch/agent-contract-db/issues/07-port-contract-semantics.md
+  // validateLocal 镜像 rejectPortOverrideInConfigJson：data.configJson 含
+  // outputs/inputs 键 → ok=false（与后端 routes/workflows.ts 一致）。
+  it('validateLocal 镜像 configJson 端口覆盖守卫', async () => {
+    const detail = makeDetail({
+      nodes: [{
+        nodeId: 'spec', agentId: 'spec', positionX: 0, positionY: 0,
+        // 模拟脏数据：configJson 含 outputs 键（应是 agent 端口契约覆盖，但已废弃）
+        configJson: JSON.stringify({ outputs: ['override.md'] }),
+        displayName: 'spec',
+      }],
+    })
+    const wrapper = await mountEditor(detail)
+    const vm = wrapper.findComponent(WorkflowEditorView).vm as any
+    const v = vm.validateLocal()
+    expect(v.ok).toBe(false)
+    expect(v.error).toMatch(/configJson 含 "outputs" 或 "inputs" 键/)
   })
 })
 

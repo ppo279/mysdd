@@ -128,8 +128,9 @@ function parseYaml(raw: string): {
       output_file: typeof a.output_file === 'string' ? a.output_file : '',
       memory_sediment: a.memory_sediment === true,
       config: (a.config && typeof a.config === 'object' ? a.config : {}) as Record<string, unknown>,
-      inputs: Array.isArray(a.inputs) ? (a.inputs as unknown[]).filter((x): x is string => typeof x === 'string') : ['default'],
-      outputs: Array.isArray(a.outputs) ? (a.outputs as unknown[]).filter((x): x is string => typeof x === 'string') : ['default'],
+      // slice 07：缺省归一化从 ['default'] 改为 []（"agent 没声明任何 port" 的语义）。
+      inputs: Array.isArray(a.inputs) ? (a.inputs as unknown[]).filter((x): x is string => typeof x === 'string') : [],
+      outputs: Array.isArray(a.outputs) ? (a.outputs as unknown[]).filter((x): x is string => typeof x === 'string') : [],
     })),
   }
 }
@@ -260,8 +261,9 @@ export function loadAgentsFromDb(): {
       base_layers: bls.map((b) => ({ name: b.name, content: b.content })),
     },
     agents: ags.map((a) => {
-      let inputs: string[] = ['default']
-      let outputs: string[] = ['default']
+      // slice 07：缺省归一化从 ['default'] 改为 []（"agent 没声明任何 port" 的语义）。
+      let inputs: string[] = []
+      let outputs: string[] = []
       let config: Record<string, unknown> = {}
       try {
         const parsedInputs = JSON.parse(a.inputsJson)
