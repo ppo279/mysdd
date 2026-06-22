@@ -130,4 +130,3 @@ CLAUDE.md
 /e2e/
 .codefree
 /docs/
-*.test.ts
