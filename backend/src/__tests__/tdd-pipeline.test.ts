@@ -144,7 +144,11 @@ beforeAll(() => {
   initDb()
 })
 
-afterAll(() => {
+afterAll(async () => {
+  // 兜底:afterEach 用 let workspaceId 检查,beforeEach 抛错时漏;这里用 Set 兜底
+  for (const wsId of [...createdWorkspaceIds]) {
+    try { await teardownWorkspace(wsId) } catch { /* best-effort */ }
+  }
   try { fs.rmSync(TEST_HOME, { recursive: true, force: true }) } catch { /* best-effort */ }
 })
 

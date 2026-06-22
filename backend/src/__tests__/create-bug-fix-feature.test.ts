@@ -33,7 +33,12 @@ beforeAll(() => {
   initDb()
 })
 
-afterAll(() => {
+afterAll(async () => {
+  // 兜底:per-test 失败 / 测试体没走到 teardown 调用时,清掉所有自创建 workspace
+  // (per-test 的 await teardownWorkspace(...) 是第一道防线;这里是漏检兜底)
+  for (const wsId of [...createdWorkspaceIds]) {
+    try { await teardownWorkspace(wsId) } catch { /* best-effort */ }
+  }
   // 关闭全局 DB（Drizzle/better-sqlite3）
   // 这里 db 单例没有暴露 close；保留进程退出时的清理
   try { fs.rmSync(TEST_HOME, { recursive: true, force: true }) } catch { /* best-effort */ }
