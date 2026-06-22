@@ -1,0 +1,8 @@
+/* Implements: .scratch/agent-ports-editor/PRD.md
+ * 端口视觉一致性：AgentNode（画布）与 PortsEditor（编辑入口）共用色 token。
+ * 改色只动这一处。
+ */
+:root {
+  --port-in-color: #94a3b8;
+  --port-out-color: #18a058;
+}

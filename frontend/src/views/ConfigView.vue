@@ -10,6 +10,8 @@ import {
   NList, NListItem, NThing, useMessage,
 } from 'naive-ui'
 const MarkdownEditor = defineAsyncComponent(() => import('@/components/MarkdownEditor.vue'))
+// Implements: .scratch/agent-ports-editor/PRD.md
+const PortsEditor = defineAsyncComponent(() => import('@/components/PortsEditor.vue'))
 
 const router = useRouter()
 const message = useMessage()
@@ -65,8 +67,10 @@ const agentForm = reactive<AgentRaw>({
   memory_sediment: false,
   config: { runtimeId: '', env: {}, cwd: '', timeoutMs: undefined },
 })
-const agentOutputsInput = ref('default')
-const agentInputsInput = ref('default')
+// Implements: .scratch/agent-ports-editor/PRD.md
+// ports 用 PortsEditor 组件编辑，内部 state 直接是 string[]（不再 split 文本）
+const agentInputs = ref<string[]>([])
+const agentOutputs = ref<string[]>([])
 // Phase 2: env 字段以 k/v 数组形式编辑，保存时合成 Record
 interface EnvEntry { key: string; value: string }
 const agentEnvList = ref<EnvEntry[]>([])
@@ -164,8 +168,8 @@ function openAddAgent() {
     instruction: '', output_file: '', outputs: [], inputs: [],
     memory_sediment: false,
   })
-  agentOutputsInput.value = 'default'
-  agentInputsInput.value = 'default'
+  agentInputs.value = []
+  agentOutputs.value = []
   agentEnvList.value = []
   agentForm.config = { runtimeId: '', env: {}, cwd: '', timeoutMs: undefined }
   agentModal.value = true
@@ -182,12 +186,8 @@ function openEditAgent(agent: AgentRaw) {
     outputs: agent.outputs ? [...agent.outputs] : [],
     memory_sediment: agent.memory_sediment ?? false,
   })
-  agentOutputsInput.value = (agent.outputs && agent.outputs.length > 0)
-    ? agent.outputs.join(', ')
-    : 'default'
-  agentInputsInput.value = (agent.inputs && agent.inputs.length > 0)
-    ? agent.inputs.join(', ')
-    : 'default'
+  agentInputs.value = agent.inputs ? [...agent.inputs] : []
+  agentOutputs.value = agent.outputs ? [...agent.outputs] : []
   // 把后端 Record<k, v> 拆回 k/v 数组，便于 NDynamicInput 编辑
   const cfg = agent.config ?? {}
   agentEnvList.value = Object.entries(cfg.env ?? {}).map(([key, value]) => ({ key, value }))
@@ -219,17 +219,16 @@ async function saveAgent() {
   const hasConfig = cfg.runtimeId || cfg.env || cfg.cwd || cfg.timeoutMs
 
   const parseList = (raw: string) => raw.split(',').map((s) => s.trim()).filter((s) => s.length > 0)
-  const parsedOutputs = parseList(agentOutputsInput.value)
-  const parsedInputs = parseList(agentInputsInput.value)
-
+  // Implements: .scratch/agent-ports-editor/PRD.md
+  // ports 已是 string[]（PortsEditor 维护），空数组不写入（与之前 "field absent" 语义一致）
   const data: AgentRaw = {
     id: agentForm.id,
     name: agentForm.name,
     runtime: agentForm.runtime,
     instruction: agentForm.instruction,
     output_file: agentForm.output_file,
-    outputs: parsedOutputs.length > 0 ? parsedOutputs : undefined,
-    inputs: parsedInputs.length > 0 ? parsedInputs : undefined,
+    outputs: agentOutputs.value.length > 0 ? [...agentOutputs.value] : undefined,
+    inputs: agentInputs.value.length > 0 ? [...agentInputs.value] : undefined,
     memory_sediment: agentForm.memory_sediment ?? false,
     config: hasConfig ? cfg : undefined,
   }
@@ -248,12 +247,32 @@ function deleteAgent(idx: number) {
   config.value.agents.splice(idx, 1)
 }
 
-// Implements: tasks.md#T032.2
-// 暴露给组件单测的关键状态（与 WorkspaceView 同模式）
+// Implements: .scratch/agent-ports-editor/PRD.md
+// output_file 与 outputs 正交，但允许一键对齐到 outputs[0]（显式可逆操作）。
+const canAlignOutputFile = computed(
+  () => !!agentOutputs.value[0] && agentOutputs.value[0] !== agentForm.output_file,
+)
+function alignOutputFileToOutputs() {
+  const first = agentOutputs.value[0]
+  if (first) agentForm.output_file = first
+}
+
+// Implements: tasks.md#T032.2 + .scratch/agent-ports-editor/PRD.md
+// 单测入口：这些函数放在 script 顶层（setupState），不要放进 defineExpose，
+// 否则 wrapper.vm 拿不到——defineExpose 只挂到「parent ref 可见的 exposed 对象」上。
+// 同时：setter 走 ref.value，不要让测试直接赋值整个 ref（替换 ref 自身会让
+// script 闭包里的原 ref 失联，saveAgent 读到的还是旧值）。
+function setAgentInputs(v: string[]) { agentInputs.value = v }
+function setAgentOutputs(v: string[]) { agentOutputs.value = v }
+
 defineExpose({
   config,
   globalSelectedIdx,
   globalSelectedContent,
+  agentForm,
+  canAlignOutputFile,
+  setAgentInputs,
+  setAgentOutputs,
 })
 </script>
 
@@ -297,12 +316,33 @@ defineExpose({
                       <NTag size="small" type="info">{{ agent.id }}</NTag>
                       <NTag size="small" type="warning">{{ agent.runtime }}</NTag>
                       <NTag size="small" type="success">→ {{ agent.output_file || '(无文件)' }}</NTag>
-                      <NTag v-if="agent.outputs?.length" size="small" type="success">
-                        out: {{ agent.outputs.join(', ') }}
-                      </NTag>
-                      <NTag v-if="agent.inputs?.length" size="small" type="info">
-                        in: {{ agent.inputs.join(', ') }}
-                      </NTag>
+                      <!--
+                        Implements: .scratch/agent-ports-editor/PRD.md
+                        列表上的 ports 用 mini 端口胶囊展示（与画布 AgentNode 同色 token），
+                        超过 3 个折叠为 +N，hover 显示全部。
+                      -->
+                      <span
+                        v-for="p in (agent.inputs ?? []).slice(0, 3)"
+                        :key="`li-${agent.id}-i-${p}`"
+                        class="port-mini port-mini--in"
+                        :title="`输入 · ${p}`"
+                      >◐ {{ p }}</span>
+                      <span
+                        v-if="(agent.inputs ?? []).length > 3"
+                        class="port-mini port-mini--in port-mini--more"
+                        :title="(agent.inputs ?? []).slice(3).join(', ')"
+                      >+{{ (agent.inputs ?? []).length - 3 }}</span>
+                      <span
+                        v-for="p in (agent.outputs ?? []).slice(0, 3)"
+                        :key="`lo-${agent.id}-o-${p}`"
+                        class="port-mini port-mini--out"
+                        :title="`输出 · ${p}`"
+                      >● {{ p }}</span>
+                      <span
+                        v-if="(agent.outputs ?? []).length > 3"
+                        class="port-mini port-mini--out port-mini--more"
+                        :title="(agent.outputs ?? []).slice(3).join(', ')"
+                      >+{{ (agent.outputs ?? []).length - 3 }}</span>
                       <!--
                         Implements: tasks.md#T028 / plan.md#D-03
                         列表上的 memory_sediment 指示标签（开启=沉淀，关闭=隐藏）
@@ -544,19 +584,43 @@ defineExpose({
             <NFormItem label="运行时" style="flex:1;">
               <NSelect v-model:value="agentForm.runtime" :options="runtimeOptions" />
             </NFormItem>
-            <NFormItem label="输出文件" style="flex:1;">
-              <NInput v-model:value="agentForm.output_file" placeholder="如 spec.md" />
+            <!--
+              Implements: .scratch/agent-ports-editor/PRD.md
+              物理输出文件名（与 outputs 正交）；可一键对齐到 outputs[0]（显式可逆）。
+              helper 写在 NFormItem 外面（form-wide :show-feedback="false"），
+              仍要可读且让单测能直接断言关键文案。
+            -->
+            <NFormItem label="物理输出文件名" style="flex:1;">
+              <div style="display:flex;gap:6px;width:100%;align-items:center;">
+                <NInput
+                  v-model:value="agentForm.output_file"
+                  placeholder="如 spec.md"
+                  style="flex:1;"
+                />
+                <NButton
+                  size="tiny"
+                  type="tertiary"
+                  :disabled="!canAlignOutputFile"
+                  @click="alignOutputFileToOutputs"
+                >对齐到 outputs[0]</NButton>
+              </div>
             </NFormItem>
+            <NText depth="3" style="font-size:11px;margin-top:-6px;">
+              写到 <code>storage/&lt;ws&gt;/&lt;featureId&gt;/此文件名</code>，与 outputs 正交：outputs 是逻辑端口名（用于画布连接和 prompt 引用）
+            </NText>
           </div>
 
-          <div style="display: flex; gap: 10px;">
-            <NFormItem label="输出 handle（逗号分隔）" style="flex: 1;">
-              <NInput v-model:value="agentOutputsInput" placeholder="如 spec.md 或 code, tests" />
-            </NFormItem>
-            <NFormItem label="输入 handle（逗号分隔）" style="flex: 1;">
-              <NInput v-model:value="agentInputsInput" placeholder="如 default 或 spec.md, plan.md" />
-            </NFormItem>
-          </div>
+          <!--
+            Implements: .scratch/agent-ports-editor/PRD.md
+            端口契约编辑器：与画布 AgentNode 视觉一致，缩略预览 + 双 panel（输入 / 输出）。
+          -->
+          <NFormItem label="端口契约">
+            <PortsEditor
+              v-model:inputs="agentInputs"
+              v-model:outputs="agentOutputs"
+              style="width:100%;"
+            />
+          </NFormItem>
 
           <!--
             Implements: tasks.md#T028 / plan.md#D-03
@@ -644,3 +708,30 @@ defineExpose({
     </div>
   </NModal>
 </template>
+
+<!--
+  Implements: .scratch/agent-ports-editor/PRD.md
+  列表卡片上的 mini 端口胶囊：颜色 token 与 AgentNode / PortsEditor 共用。
+-->
+<style scoped>
+.port-mini {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-family: ui-monospace, monospace;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: #f4f4f5;
+  color: #3f3f46;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.port-mini--in { color: var(--port-in-color); }
+.port-mini--out { color: var(--port-out-color); }
+.port-mini--more {
+  background: transparent;
+  color: #71717a;
+}
+</style>

@@ -109,9 +109,9 @@ export function handleTop(idx: number, total: number): string {
   font-family: monospace;
 }
 
-/* handle 圆点 */
-.agent-node__handle--in  { background: #94a3b8 !important; }
-.agent-node__handle--out { background: #18a058 !important; }
+/* handle 圆点 — 颜色 token 与 PortsEditor 共用（见 port-colors.css） */
+.agent-node__handle--in  { background: var(--port-in-color) !important; }
+.agent-node__handle--out { background: var(--port-out-color) !important; }
 
 /* handle 行内标签 */
 .agent-node__hlabel {
@@ -128,11 +128,11 @@ export function handleTop(idx: number, total: number): string {
 .agent-node__hlabel--in {
   left: 10px;
   text-align: left;
-  color: #94a3b8;
+  color: var(--port-in-color);
 }
 .agent-node__hlabel--out {
   right: 10px;
   text-align: right;
-  color: #18a058;
+  color: var(--port-out-color);
 }
 </style>
