@@ -267,6 +267,34 @@ describe('ConfigView (slice 9) — 端口契约编辑入口', () => {
     expect(saveCall.agents[0].inputs).toEqual(['spec.md'])
   })
 
+  // Implements: agent 编辑弹窗「运行时 / 物理输出文件名」行的布局回归。
+  // 历史 bug：helper 文本（NText「storage/...与 outputs 正交」）被错误地塞进了
+  // 内层 display:flex row，使得该 row 有 3 个 flex 子节点；helper 的自然宽度
+  // (~244px) 加上 gap 把两个 NFormItem 各自挤到 0 宽 → 输入框看不见。
+  // 修后 helper 应作为该 row 的兄弟节点存在（不在 row 内），row 只有 2 个子节点。
+  it('⑩ 「运行时 / 物理输出文件名」行的 flex row 只含两个 NFormItem', async () => {
+    const agent = {
+      id: 'spec', name: 'Spec', runtime: 'claude',
+      instruction: '', output_file: 'spec.md',
+      outputs: ['default'], inputs: [],
+    } as any
+    const w = await trackMount([agent])
+    await openEditAgentModal(w)
+    // 找「物理输出文件名」input，沿 DOM 上溯到所属的 n-form-item wrapper
+    const input = Array.from(document.body.querySelectorAll('input'))
+      .find((i) => i.placeholder === '如 spec.md')!
+    expect(input).toBeDefined()
+    const formItem = input.closest('.n-form-item') as HTMLElement
+    expect(formItem).not.toBeNull()
+    // formItem 的直接父节点就是那个 display:flex 的 row
+    const flexRow = formItem.parentElement as HTMLElement
+    expect(flexRow).not.toBeNull()
+    expect(getComputedStyle(flexRow).display).toBe('flex')
+    // 关键断言：row 只装两个 NFormItem，helper 不应在此
+    expect(flexRow.children.length).toBe(2)
+    expect(flexRow.querySelectorAll(':scope > .n-form-item').length).toBe(2)
+  })
+
   it('⑨ 编辑后空 outputs/inputs 不写入 body（保留 "field absent" 语义）', async () => {
     const agent = {
       id: 'spec', name: 'Spec', runtime: 'claude',

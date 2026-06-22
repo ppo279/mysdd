@@ -7,16 +7,16 @@
 // - 路由层不依赖 route.meta：面包屑层级由 path/params 直接推导，零配置即可工作。
 // - 异步资源（工作区名、workflow 名）通过 watch + store.loadXxx 按需拉取，
 //   拉取前显示 "…" 占位，避免对每个路由都强制发起请求。
-// - 现有 view（WorkspaceView / FeatureView）仍保留各自的 NLayout 内部容器，
-//   嵌套在 NLayout 内是合法的（多一层 div 但不破坏布局）。view 内部重复的
-//   NLayoutHeader 在后续 slice 6 重构步骤统一删除。
+// - view 自带的 NLayoutHeader 已在 slice 6 删除；view 内操作按钮通过
+//   <Teleport to="#app-header-actions-slot"> 注入到全局 header 右侧。
+//   整页只剩 1 个 .n-breadcrumb（不重复）。
 
 import { computed, watch } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
 import {
   NConfigProvider, NGlobalStyle, NMessageProvider, NDialogProvider,
   NNotificationProvider, NLayout, NLayoutHeader,
-  NBreadcrumb, NBreadcrumbItem,
+  NBreadcrumb, NBreadcrumbItem, NSpace,
 } from 'naive-ui'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useWorkflowStore } from '@/stores/workflow'
@@ -88,22 +88,26 @@ watch(
       <NDialogProvider>
         <NNotificationProvider>
           <NLayout style="height: 100vh;">
-            <!-- Implements: bug-report 2026-06-18 -->
-            <!-- 全局顶部导航：所有路由都显示。to 不存在即为当前层级（不可点击） -->
+            <!-- Implements: bug-report 2026-06-18 / slice 6 -->
+            <!-- 全局顶部导航：所有路由都显示。to 不存在即为当前层级（不可点击）。
+                 右侧 #app-header-actions-slot 接收 view 的 Teleport 注入。 -->
             <NLayoutHeader
               style="padding: 0 24px; border-bottom: 1px solid #efeff5; background: #fff;"
             >
-              <NBreadcrumb style="height: 56px; line-height: 56px;">
-                <NBreadcrumbItem
-                  v-for="(c, i) in crumbs"
-                  :key="i"
-                  :clickable="!!c.to"
-                  @click="c.to && router.push(c.to)"
-                  style="cursor: pointer;"
-                >
-                  {{ c.label }}
-                </NBreadcrumbItem>
-              </NBreadcrumb>
+              <NSpace justify="space-between" align="center" style="height: 56px;">
+                <NBreadcrumb>
+                  <NBreadcrumbItem
+                    v-for="(c, i) in crumbs"
+                    :key="i"
+                    :clickable="!!c.to"
+                    @click="c.to && router.push(c.to)"
+                    style="cursor: pointer;"
+                  >
+                    {{ c.label }}
+                  </NBreadcrumbItem>
+                </NBreadcrumb>
+                <div id="app-header-actions-slot" />
+              </NSpace>
             </NLayoutHeader>
             <RouterView />
           </NLayout>

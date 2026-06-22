@@ -4,8 +4,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { useChatStore } from '@/stores/chat'
 import { api } from '@/api'
 import {
-  NLayout, NLayoutHeader, NLayoutContent, NSpace, NButton, NText, NSpin,
-  NBreadcrumb, NBreadcrumbItem, NInput, NScrollbar, NTag, NAlert, NDivider,
+  NLayout, NLayoutContent, NSpace, NButton, NText, NSpin,
+  NInput, NScrollbar, NTag, NAlert, NDivider,
   NTabs, NTabPane, NDropdown, NSelect,
   useMessage,
 } from 'naive-ui'
@@ -280,29 +280,6 @@ function colorizeDiffLine(line: string): { color: string; bg: string } {
 
 <template>
   <NLayout style="height: 100vh; display: flex; flex-direction: column;">
-    <!-- 顶部导航 -->
-    <NLayoutHeader style="padding: 0 20px; border-bottom: 1px solid #efeff5; background: #fff; flex-shrink: 0;">
-      <NSpace justify="space-between" align="center" style="height: 48px;">
-        <NBreadcrumb>
-          <NBreadcrumbItem @click="router.push('/')" style="cursor:pointer;">SDD Multi-Agent</NBreadcrumbItem>
-          <NBreadcrumbItem @click="router.push(`/workspace/${workspaceId}`)" style="cursor:pointer;">
-            Workspace
-          </NBreadcrumbItem>
-          <NBreadcrumbItem>{{ chat.featureDetail?.name ?? '...' }}</NBreadcrumbItem>
-        </NBreadcrumb>
-        <NSpace align="center">
-          <NText depth="3" style="font-size:12px;">Feature ID: {{ featureId.slice(0,8) }}</NText>
-          <NButton
-            size="small"
-            :loading="isLoadingWorkflowList"
-            @click="openSwitchDialog"
-          >
-            切换工作流…
-          </NButton>
-        </NSpace>
-      </NSpace>
-    </NLayoutHeader>
-
     <!-- 阶段进度 -->
     <div style="padding: 12px 20px; border-bottom: 1px solid #efeff5; background: #fafafa; flex-shrink: 0;">
       <NSpace align="center" :wrap="false">
@@ -710,6 +687,22 @@ function colorizeDiffLine(line: string): { color: string; bg: string } {
       :workflow-options="workflowList"
       @applied="onSwitchApplied"
     />
+
+    <!-- Implements: bug-report 2026-06-18 / slice 6 -->
+    <!-- 原 view 自带 NLayoutHeader 已删除，Feature ID + 切换工作流按钮
+         通过 Teleport 注入到 App.vue header 右侧 -->
+    <Teleport to="#app-header-actions-slot">
+      <NSpace align="center">
+        <NText depth="3" style="font-size:12px;">Feature ID: {{ featureId.slice(0,8) }}</NText>
+        <NButton
+          size="small"
+          :loading="isLoadingWorkflowList"
+          @click="openSwitchDialog"
+        >
+          切换工作流…
+        </NButton>
+      </NSpace>
+    </Teleport>
   </NLayout>
 </template>
 

@@ -3,8 +3,8 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { api, type WorkspaceDetail, type Feature } from '@/api'
 import {
-  NLayout, NLayoutHeader, NLayoutContent, NSpace, NButton, NText, NEmpty, NSpin,
-  NModal, NCard, NForm, NFormItem, NInput, NSelect, NTag, NBreadcrumb, NBreadcrumbItem,
+  NLayout, NLayoutContent, NSpace, NButton, NText, NEmpty, NSpin,
+  NModal, NCard, NForm, NFormItem, NInput, NSelect, NTag,
   NList, NListItem, NThing, NPopconfirm, NDropdown, NLog, useMessage,
 } from 'naive-ui'
 
@@ -202,20 +202,6 @@ defineExpose({
 
 <template>
   <NLayout style="height: 100vh;">
-    <NLayoutHeader style="padding: 0 24px; border-bottom: 1px solid #efeff5; background: #fff;">
-      <NSpace justify="space-between" align="center" style="height: 56px;">
-        <NBreadcrumb>
-          <NBreadcrumbItem @click="router.push('/')" style="cursor:pointer;">SDD Multi-Agent</NBreadcrumbItem>
-          <NBreadcrumbItem>{{ detail?.name ?? '...' }}</NBreadcrumbItem>
-        </NBreadcrumb>
-        <NSpace>
-          <NButton type="primary" @click="showCreate = true">+ 新建 Feature</NButton>
-          <!-- Implements: docs/adr/0001-workflow-execution-model.md (Phase 4) -->
-          <NButton @click="router.push(`/workspace/${workspaceId}/workflows`)">Workflows</NButton>
-        </NSpace>
-      </NSpace>
-    </NLayoutHeader>
-
     <NLayoutContent style="padding: 28px 24px; overflow: auto;">
       <div v-if="!detail" style="text-align:center; padding:80px 0;">
         <NSpin size="large" />
@@ -309,6 +295,15 @@ defineExpose({
       </template>
     </NLayoutContent>
   </NLayout>
+
+  <!-- Implements: bug-report 2026-06-18 / slice 6 -->
+  <!-- 原 view 自带 NLayoutHeader 已删除，操作按钮通过 Teleport 注入到 App.vue header 右侧 -->
+  <Teleport to="#app-header-actions-slot">
+    <NSpace>
+      <NButton type="primary" @click="showCreate = true">+ 新建 Feature</NButton>
+      <NButton @click="router.push(`/workspace/${workspaceId}/workflows`)">Workflows</NButton>
+    </NSpace>
+  </Teleport>
 
   <NModal v-model:show="showCreate">
     <NCard title="新建 Feature" closable style="width:560px;background:#fff;"

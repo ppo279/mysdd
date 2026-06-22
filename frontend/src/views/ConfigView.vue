@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, computed, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { api, type AgentsYamlRaw, type RuntimeRaw, type AgentRaw, type DetectedRuntime } from '@/api'
 import { defineAsyncComponent } from 'vue'
@@ -7,7 +7,7 @@ import {
   NLayout, NLayoutHeader, NLayoutContent, NSpace, NButton, NText, NEmpty,
   NTabs, NTabPane, NTag, NSpin,
   NModal, NCard, NForm, NFormItem, NInput, NSelect, NCheckbox, NInputNumber,
-  NList, NListItem, NThing, useMessage,
+  NList, NListItem, NThing, NCollapse, NCollapseItem, useMessage,
 } from 'naive-ui'
 const MarkdownEditor = defineAsyncComponent(() => import('@/components/MarkdownEditor.vue'))
 // Implements: .scratch/agent-ports-editor/PRD.md
@@ -605,10 +605,16 @@ defineExpose({
                 >对齐到 outputs[0]</NButton>
               </div>
             </NFormItem>
-            <NText depth="3" style="font-size:11px;margin-top:-6px;">
-              写到 <code>storage/&lt;ws&gt;/&lt;featureId&gt;/此文件名</code>，与 outputs 正交：outputs 是逻辑端口名（用于画布连接和 prompt 引用）
-            </NText>
           </div>
+          <!--
+            Implements: .scratch/agent-ports-editor/PRD.md
+            helper 必须是内层 flex row 的兄弟节点（不在 row 内），
+            否则它会作为第三个 flex 子节点把两个 NFormItem 挤到 0 宽。
+            复测入口：ConfigView.test.ts ⑩。
+          -->
+          <NText depth="3" style="font-size:11px;">
+            写到 <code>storage/&lt;ws&gt;/&lt;featureId&gt;/此文件名</code>，与 outputs 正交：outputs 是逻辑端口名（用于画布连接和 prompt 引用）
+          </NText>
 
           <!--
             Implements: .scratch/agent-ports-editor/PRD.md
