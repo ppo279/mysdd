@@ -242,6 +242,12 @@ export class AgentService {
       status: 'active',
       artifactContent: '',
       artifactPath: '',
+      // Implements: .scratch/agent-contract-db/issues/04-runtime-contract.md
+      // slice 04：把启动时 agent.instruction 拷到 snapshot——之后 resume
+      // 路径用 snapshot 拼 system prompt，不读 live agent 行。Q2 决策 A：
+      // 中途改 agent.instruction 不会影响 in-flight stage_run；下一次
+      // 新 startStage 才用新 instruction。
+      instructionSnapshot: agent.instruction,
       createdAt: now,
     })
 
@@ -456,6 +462,44 @@ export class AgentService {
     const outputNames = Object.keys(outputs)
     if (outputNames.length === 0) {
       throw new BizError(Code.WORKFLOW_INVALID, 'approve requires at least one output', 400)
+    }
+
+    // Implements: .scratch/agent-contract-db/issues/04-runtime-contract.md
+    // slice 04：approveStage 校验 outputName ∈ node.agent.outputs —— 拒绝任何不在
+    // agent 声明里的 key，避免 typo 污染产物路径。
+    // 同时校验 content 非空（空字符串视为待补，避免漏审）。
+    const [feature] = await db.select().from(features).where(eq(features.id, run.featureId))
+    let agent: ReturnType<typeof getAgentConfig> | undefined
+    if (feature?.currentWorkflowId) {
+      const [node] = await db
+        .select()
+        .from(workflowNodes)
+        .where(and(
+          eq(workflowNodes.workflowId, feature.currentWorkflowId),
+          eq(workflowNodes.nodeId, run.nodeId),
+        ))
+      if (node) {
+        agent = getAgentConfig(node.agentId)
+      }
+    }
+    if (agent) {
+      const declared = new Set(agent.outputs)
+      const invalid = outputNames.filter((k) => !declared.has(k))
+      if (invalid.length > 0) {
+        throw new BizError(
+          Code.WORKFLOW_INVALID,
+          `approve outputName(s) not declared by agent "${agent.id}": [${invalid.join(', ')}]; declared: [${agent.outputs.join(', ') || '(empty)'}]`,
+          400,
+        )
+      }
+      const empty = outputNames.filter((k) => !(outputs[k] ?? '').trim())
+      if (empty.length > 0) {
+        throw new BizError(
+          Code.WORKFLOW_INVALID,
+          `approve output(s) have empty content: [${empty.join(', ')}]; edit and resubmit`,
+          400,
+        )
+      }
     }
 
     // 写文件 + 写 stage_run_outputs

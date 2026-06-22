@@ -541,7 +541,7 @@ function colorizeDiffLine(line: string): { color: string; bg: string } {
                       <td style="padding:6px;">
                         <NTag v-if="p.passed === true" type="success" size="small" round>PASS</NTag>
                         <NTag v-else-if="p.passed === false" type="error" size="small" round>FAIL</NTag>
-                        <NTag v-else size="default" size="small" round>SKIP</NTag>
+                        <NTag v-else type="default" size="small" round>SKIP</NTag>
                       </td>
                       <td style="padding:6px; text-align:right; font-family:monospace; color:#666;">{{ p.exitCode ?? '-' }}</td>
                       <td style="padding:6px; text-align:right; font-family:monospace; color:#666;">{{ p.durationMs }}</td>

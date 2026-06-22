@@ -180,6 +180,43 @@ describe('AC-04 / BI-02: buildSystemPrompt 不引用 memory/', () => {
   })
 })
 
+// ============== slice 04: buildSystemPrompt 追加"产出契约"小节 ==============
+// (.scratch/agent-contract-db/issues/04-runtime-contract.md)
+
+describe('slice 04: buildSystemPrompt 追加 ## 产出契约 小节', () => {
+  it('agent.outputs 非空 → prompt 含 ## 产出契约 + 所有文件名（按数组顺序）', () => {
+    seed(`
+runtimes:
+  - { id: claude, type: claude-cli, command: claude }
+global:
+  base_layers: []
+agents:
+  - { id: spec, name: Spec, runtime: claude, instruction: "Spec", output_file: spec.md, outputs: [spec.md, summary.md] }
+`)
+    const prompt = buildSystemPrompt('spec', 'ts', '')
+    expect(prompt).toContain('## 产出契约')
+    expect(prompt).toContain('`spec.md`')
+    expect(prompt).toContain('`summary.md`')
+    // 顺序：spec.md 在 summary.md 之前
+    const i1 = prompt.indexOf('`spec.md`')
+    const i2 = prompt.indexOf('`summary.md`')
+    expect(i1).toBeLessThan(i2)
+  })
+
+  it('agent.outputs 为空 → prompt 不含 ## 产出契约（避免无意义噪声）', () => {
+    seed(`
+runtimes:
+  - { id: claude, type: claude-cli, command: claude }
+global:
+  base_layers: []
+agents:
+  - { id: spec, name: Spec, runtime: claude, instruction: "Spec", output_file: spec.md }
+`)
+    const prompt = buildSystemPrompt('spec', 'ts', '')
+    expect(prompt).not.toContain('## 产出契约')
+  })
+})
+
 // ============== T008: getSedimentEnabledAgents ==============
 
 describe('T008: getSedimentEnabledAgents（memory_sediment 钩子）', () => {

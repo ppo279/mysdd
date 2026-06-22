@@ -61,12 +61,15 @@ export const useChatStore = defineStore('chat', () => {
     const runs = featureDetail.value.stageRuns
     const currentRun = [...runs].reverse().find((r) => r.nodeId === currentNodeId)
 
-    // 找到当前节点配置的第一个 output handle 名，approve 时用它作 outputName key，
+    // 找到当前节点引用 agent 的第一个 output handle 名，approve 时用它作 outputName key，
     // 与 workflow_edges.fromOutput 保持一致，使后端能正确注入上游产物。
+    // Implements: .scratch/agent-contract-db/issues/04-runtime-contract.md
+    // slice 04: source of truth 切到 agent config.outputs，旧的 `outputs`
+    // （来自 configJson 解析）作为向后兼容保留——新代码用 `agentOutputs`。
     const currentNode = featureDetail.value.workflow.nodes.find(
       (n) => n.nodeId === currentNodeId,
     )
-    const firstOutputName = currentNode?.outputs?.[0] ?? 'default'
+    const firstOutputName = currentNode?.agentOutputs?.[0] ?? 'default'
 
     if (currentRun) {
       activeStageRun.value = currentRun

@@ -172,10 +172,13 @@ export interface FeatureContext {
   mode?: string
 }
 
-// ── 系统提示拼装（三层）────────────────────────────────────────
+// ── 系统提示拼装（四层）────────────────────────────────────────
 // Layer 1: global.base_layers（所有 Agent 共享，DB 里顺序由 position 决定）
 // Layer 2: agent instruction（DB agents.instruction）- 占位符 [项目名称] [想法描述] [任务模式] 被替换
 // Layer 3: workspace 背景（运行时注入）
+// Layer 4: 产出契约（slice 04 增）—— 列出该 agent 的 outputs 文件名，
+//          让 LLM 在 system prompt 里就看到 I/O 契约，配合 approveStage 的
+//          outputName 校验把"端口契约"做成真正的运行时约束。
 export function buildSystemPrompt(
   agentId: string,
   _techStack: string,
@@ -207,6 +210,13 @@ export function buildSystemPrompt(
   // Layer 3: 运行时背景
   if (workspaceBackground.trim()) {
     parts.push(`## Workspace 背景信息\n\n${workspaceBackground}`)
+  }
+
+  // Layer 4: 产出契约（slice 04）
+  // 空 outputs（如 spec 入口节点）的 agent 不注入此节——避免无意义噪声。
+  if (agent.outputs.length > 0) {
+    const files = agent.outputs.map((o) => `- \`${o}\``).join('\n')
+    parts.push(`## 产出契约\n\n本阶段结束后，你必须产出以下文件（每个落到 \`storage/<workspaceId>/<featureId>/<nodeId>/<filename>\`）：\n\n${files}`)
   }
 
   return parts.join('\n\n---\n\n')

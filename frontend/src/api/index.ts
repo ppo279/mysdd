@@ -453,8 +453,12 @@ export interface WorkflowNodeView {
   displayName: string
   positionX: number
   positionY: number
-  /** 从 configJson 解析出的输出 handle 名列表，后端已展开，默认 ['default'] */
+  /** 从 configJson 解析出的输出 handle 名列表（保留向后兼容；新代码用 agentOutputs）。 */
   outputs: string[]
+  // Implements: .scratch/agent-contract-db/issues/04-runtime-contract.md
+  // slice 04：source of truth 切到 agent config。approve 时 outputName 校验
+  // 和 chat.firstOutputName 都从这里取，不再走 configJson 覆盖。
+  agentOutputs: string[]
 }
 
 export interface WorkflowEdgeView {

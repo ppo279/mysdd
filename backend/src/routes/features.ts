@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { getAgentConfig } from '../config/agents.js'
 import {
   features,
   stageRuns,
@@ -211,7 +212,7 @@ export async function featureRoutes(app: FastifyInstance) {
     }
 
     // 当前 workflow 的节点 / 边（供前端画阶段进度条）
-    let workflowNodesList: Array<{ nodeId: string; agentId: string; displayName: string; positionX: number; positionY: number; outputs: string[] }> = []
+    let workflowNodesList: Array<{ nodeId: string; agentId: string; displayName: string; positionX: number; positionY: number; outputs: string[]; agentOutputs: string[] }> = []
     let workflowEdgesList: Array<{ fromNodeId: string; fromOutput: string; toNodeId: string; toInput: string }> = []
     if (feature.currentWorkflowId) {
       const ns = await db
@@ -223,11 +224,22 @@ export async function featureRoutes(app: FastifyInstance) {
         .from(workflowEdges)
         .where(eq(workflowEdges.workflowId, feature.currentWorkflowId))
       workflowNodesList = ns.map((n) => {
-        let outputs: string[] = ['default']
+        // Implements: .scratch/agent-contract-db/issues/04-runtime-contract.md
+        // slice 04：`outputs` 字段来源从 workflow_nodes.configJson.outputs 切换到
+        // agent.outputs——port 契约是 agent 级真相，不再走 per-node 覆盖。
+        // 同时新增 `agentOutputs` 字段给前端 chat store（firstOutputName）。
+        // 老 configJson.outputs 仍保留在 `outputs` 字段以兼容现有调用方，
+        // 但前端 chat 切到 agentOutputs；workflow editor 不再写 configJson.outputs。
+        let outputs: string[] = []
         try {
           const cfg = n.configJson ? JSON.parse(n.configJson) : {}
           if (Array.isArray(cfg.outputs) && cfg.outputs.length > 0) outputs = cfg.outputs
         } catch { /* 非法 configJson 静默 */ }
+        let agentOutputs: string[] = []
+        try {
+          const agent = getAgentConfig(n.agentId)
+          agentOutputs = agent.outputs
+        } catch { /* agent 不在表里：fallback 空数组——前端会用 'default' 兜底 */ }
         return {
           nodeId: n.nodeId,
           agentId: n.agentId,
@@ -235,6 +247,7 @@ export async function featureRoutes(app: FastifyInstance) {
           positionX: n.positionX,
           positionY: n.positionY,
           outputs,
+          agentOutputs,
         }
       })
       workflowEdgesList = es.map((e) => ({
