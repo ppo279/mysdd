@@ -222,6 +222,9 @@ export function buildSystemPrompt(
   _techStack: string,
   workspaceBackground: string,
   featureCtx?: FeatureContext,
+  // slice 04：resume 路径传 snapshot 覆盖 live agent.instruction。
+  // 4-参形式调用方保持不变；undefined 时回退到 agent.instruction。
+  instructionOverride?: string,
 ): string {
   const { global: globalCfg } = loadAgentsConfig()
   const agent = getAgentConfig(agentId)
@@ -234,8 +237,9 @@ export function buildSystemPrompt(
   }
 
   // Layer 2: 角色层（替换占位符）
-  if (agent.instruction.trim()) {
-    let instruction = agent.instruction
+  const effectiveInstruction = instructionOverride ?? agent.instruction
+  if (effectiveInstruction.trim()) {
+    let instruction = effectiveInstruction
     if (featureCtx) {
       instruction = instruction
         .replaceAll('[项目名称]', featureCtx.name)
@@ -280,34 +284,20 @@ export function buildResumeSystemPrompt(stageRunId: string, workspaceBackground:
     throw new BizError(Code.STAGERUN_NOT_FOUND, `StageRun ${stageRunId} not found`, 404)
   }
   const agentId = run.stage
+
+  // 取 agent 行只为拿到 snapshot——live agent 校验交给 buildSystemPrompt 内的
+  // getAgentConfig 兜底（不存在时抛 500 INTERNAL）。
   const agentRows = db.select().from(agents).where(eq(agents.id, agentId)).all()
   const agent = agentRows[0]
   if (!agent) {
     throw new BizError(Code.INTERNAL, `Agent "${agentId}" not found while resuming stageRun`, 500)
   }
 
+  // 走 buildSystemPrompt 的标准 4 层拼接，instruction 用 snapshot 覆盖 live。
+  // outputs / base_layers / workspace background 全部走 live agent 配置
+  // （这些是契约的一部分，不属于"边跑边改"的 instruction 漂移面）。
   const snapshotInstruction = run.instructionSnapshot ?? agent.instruction
-  const outputs = parseStringArray(agent.outputsJson) ?? []
-
-  // 走与 buildSystemPrompt 一致的拼接路径，但 instruction 字段用 snapshot。
-  const { global: globalCfg } = loadAgentsConfig()
-
-  const parts: string[] = []
-  for (const layer of globalCfg.base_layers) {
-    if (layer.content?.trim()) parts.push(layer.content)
-  }
-  if (snapshotInstruction.trim()) {
-    parts.push(snapshotInstruction)
-  }
-  if (workspaceBackground.trim()) {
-    parts.push(`## Workspace 背景信息\n\n${workspaceBackground}`)
-  }
-  if (outputs.length > 0) {
-    const files = outputs.map((o) => `- \`${o}\``).join('\n')
-    parts.push(`## 产出契约\n\n本阶段结束后，你必须产出以下文件：\n\n${files}`)
-  }
-
-  return parts.join('\n\n---\n\n')
+  return buildSystemPrompt(agentId, '', workspaceBackground, undefined, snapshotInstruction)
 }
 
 /**

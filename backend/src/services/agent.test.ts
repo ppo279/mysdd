@@ -929,6 +929,10 @@ describe('slice 04: approveStage outputName 校验', () => {
     await expect(
       AgentService.approveStage(runId, { default: '# whatever' }, wsId, featId),
     ).rejects.toThrow(/not declared/)
+    // AC #2 要求错误消息"列出非法 key"——验证 'default' 出现在消息中
+    await expect(
+      AgentService.approveStage(runId, { default: '# whatever' }, wsId, featId),
+    ).rejects.toThrow(/default/)
   })
 })
 
