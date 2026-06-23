@@ -240,6 +240,8 @@ async function saveAgent() {
   }
 
   await saveConfig()
+  // 重置 dirty 快照（保存后的状态即新基线）
+  initialSnapshot.value = snapshotForm()
   agentModal.value = false
 }
 
@@ -257,6 +259,54 @@ function alignOutputFileToOutputs() {
   if (first) agentForm.output_file = first
 }
 
+// Implements: .scratch/agent-ports-editor/PRD.md
+// 「未保存」状态：snapshot 字符串对比。
+// 打开 modal 后 nextTick 拍快照；任意字段变化 → dirty=true；保存成功 → dirty=false。
+// 这样比 watch + flag 更稳（不依赖 deep watch 的初始化触发）。
+const initialSnapshot = ref('')
+function snapshotForm(): string {
+  return JSON.stringify({
+    id: agentForm.id,
+    name: agentForm.name,
+    runtime: agentForm.runtime,
+    output_file: agentForm.output_file,
+    memory_sediment: !!agentForm.memory_sediment,
+    inputs: [...agentInputs.value],
+    outputs: [...agentOutputs.value],
+    env: agentEnvList.value.map((e) => ({ key: e.key, value: e.value })),
+    config: {
+      runtimeId: agentForm.config?.runtimeId ?? '',
+      cwd: agentForm.config?.cwd ?? '',
+      timeoutMs: agentForm.config?.timeoutMs ?? null,
+    },
+  })
+}
+const isDirty = computed(() => {
+  // modal 未打开时永远 false（避免打开前 computed 误判）
+  if (!agentModal.value) return false
+  // 初始快照未拍到之前不报错
+  if (!initialSnapshot.value) return false
+  return snapshotForm() !== initialSnapshot.value
+})
+
+watch(agentModal, async (open) => {
+  if (!open) return
+  // 等 openAddAgent / openEditAgent 的所有 reactive 赋值跑完再拍快照
+  await nextTick()
+  initialSnapshot.value = snapshotForm()
+})
+
+// 「运行时配置」section 默认折叠；字段计数做 badge，给用户决定是否展开的线索
+const runtimeCfgFieldCount = computed(() => {
+  const c = agentForm.config
+  let n = 0
+  if (c?.runtimeId) n++
+  if (c?.cwd) n++
+  if (c?.timeoutMs != null) n++
+  if (agentEnvList.value.some((e) => e.key.trim().length > 0)) n++
+  return n
+})
+
 // Implements: tasks.md#T032.2 + .scratch/agent-ports-editor/PRD.md
 // 单测入口：这些函数放在 script 顶层（setupState），不要放进 defineExpose，
 // 否则 wrapper.vm 拿不到——defineExpose 只挂到「parent ref 可见的 exposed 对象」上。
@@ -271,6 +321,8 @@ defineExpose({
   globalSelectedContent,
   agentForm,
   canAlignOutputFile,
+  isDirty,
+  runtimeCfgFieldCount,
   setAgentInputs,
   setAgentOutputs,
 })
@@ -563,153 +615,236 @@ defineExpose({
     </NCard>
   </NModal>
 
-  <!-- ─── Agent 编辑弹窗（左右分栏）─── -->
+  <!--
+    Agent 编辑弹窗（节点配置 drawer 风格，参考 LangGraph Studio / n8n）：
+    - 顶部 sticky header: 标识当前编辑对象 + 「未保存」指示 + 关闭
+    - 左 sidebar (380px): 4 个 collapsible section + 底部 sticky action bar
+    - 右 editor: MarkdownEditor + 顶部字符计数
+    Implements: .scratch/agent-ports-editor/PRD.md
+  -->
   <NModal v-model:show="agentModal">
-    <div style="display:flex;width:90vw;max-width:1100px;height:82vh;overflow:hidden;border-radius:8px;background:#fff;">
-      <!-- 左：配置区 -->
-      <div style="width:320px;flex-shrink:0;display:flex;flex-direction:column;border-right:1px solid #efeff5;overflow-y:auto;padding:20px;gap:12px;">
-        <NText strong style="font-size:15px;">{{ editingAgent ? '编辑 Agent' : '新增 Agent' }}</NText>
+    <div class="agent-modal">
+      <!-- 顶 header -->
+      <header class="agent-modal__header">
+        <div class="agent-modal__title-group">
+          <span class="agent-modal__crumb">
+            {{ editingAgent ? '编辑 Agent' : '新增 Agent' }}
+          </span>
+          <span v-if="editingAgent" class="agent-modal__id">· {{ editingAgent.id }}</span>
+          <span v-else class="agent-modal__badge agent-modal__badge--new">NEW</span>
+          <span v-if="isDirty" class="agent-modal__dirty">● 未保存</span>
+        </div>
+        <button
+          class="agent-modal__close"
+          aria-label="关闭"
+          @click="agentModal = false"
+        >✕</button>
+      </header>
 
-        <NForm label-placement="top" :show-feedback="false" style="gap:10px;display:flex;flex-direction:column;">
-          <div style="display:flex;gap:10px;">
-            <NFormItem label="ID *" style="flex:1;">
-              <NInput v-model:value="agentForm.id" placeholder="如 spec" :disabled="!!editingAgent" />
-            </NFormItem>
-            <NFormItem label="名称 *" style="flex:1;">
-              <NInput v-model:value="agentForm.name" placeholder="如 Spec Agent" />
-            </NFormItem>
-          </div>
+      <div class="agent-modal__body">
+        <!-- 左 sidebar：分组配置 -->
+        <aside class="agent-modal__sidebar">
+          <NCollapse
+            :default-expanded-names="['basic', 'ports', 'behavior']"
+            arrow-placement="right"
+            class="agent-modal__collapse"
+          >
+            <!-- ─── 基础信息 ─── -->
+            <NCollapseItem name="basic">
+              <template #header>
+                <div class="agent-modal__section-header">
+                  <span class="agent-modal__section-title">基础信息</span>
+                  <span class="agent-modal__section-hint">ID 与名称不可在流水线中修改</span>
+                </div>
+              </template>
+              <NForm label-placement="top" :show-feedback="false" class="agent-modal__form">
+                <div class="agent-modal__row" style="display:flex;gap:10px;">
+                  <NFormItem label="ID *" style="flex:1;">
+                    <NInput
+                      v-model:value="agentForm.id"
+                      placeholder="如 spec"
+                      :disabled="!!editingAgent"
+                    />
+                  </NFormItem>
+                  <NFormItem label="名称 *" style="flex:1;">
+                    <NInput v-model:value="agentForm.name" placeholder="如 Spec Agent" />
+                  </NFormItem>
+                </div>
+                <div class="agent-modal__row" style="display:flex;gap:10px;">
+                  <NFormItem label="运行时类型" style="flex:1;">
+                    <NSelect
+                      v-model:value="agentForm.runtime"
+                      :options="runtimeOptions"
+                    />
+                  </NFormItem>
+                  <!--
+                    Implements: .scratch/agent-ports-editor/PRD.md
+                    物理输出文件名（与 outputs 正交）；可一键对齐到 outputs[0]（显式可逆）。
+                    复测入口：ConfigView.test.ts ②「物理输出文件名」+ 与 outputs 正交。
+                  -->
+                  <NFormItem label="物理输出文件名" style="flex:1;">
+                    <div class="agent-modal__input-group">
+                      <NInput
+                        v-model:value="agentForm.output_file"
+                        placeholder="如 spec.md"
+                        style="flex:1;"
+                      />
+                      <NButton
+                        size="tiny"
+                        type="tertiary"
+                        :disabled="!canAlignOutputFile"
+                        @click="alignOutputFileToOutputs"
+                      >对齐 outputs[0]</NButton>
+                    </div>
+                  </NFormItem>
+                </div>
+                <NText depth="3" class="agent-modal__helper">
+                  写到 <code>storage/&lt;ws&gt;/&lt;featureId&gt;/此文件名</code>，与 outputs 正交：outputs 是逻辑端口名（用于画布连接和 prompt 引用）
+                </NText>
+              </NForm>
+            </NCollapseItem>
 
-          <div style="display:flex;gap:10px;">
-            <NFormItem label="运行时" style="flex:1;">
-              <NSelect v-model:value="agentForm.runtime" :options="runtimeOptions" />
-            </NFormItem>
+            <!-- ─── 端口契约 ─── -->
+            <NCollapseItem name="ports">
+              <template #header>
+                <div class="agent-modal__section-header">
+                  <span class="agent-modal__section-title">端口契约</span>
+                  <span class="agent-modal__section-hint">
+                    画布上的连接点；prompt 里可用 inputs.X / outputs.X 引用
+                  </span>
+                </div>
+              </template>
+              <PortsEditor
+                v-model:inputs="agentInputs"
+                v-model:outputs="agentOutputs"
+                style="width:100%;"
+              />
+            </NCollapseItem>
+
             <!--
-              Implements: .scratch/agent-ports-editor/PRD.md
-              物理输出文件名（与 outputs 正交）；可一键对齐到 outputs[0]（显式可逆）。
-              helper 写在 NFormItem 外面（form-wide :show-feedback="false"），
-              仍要可读且让单测能直接断言关键文案。
+              Implements: docs/adr/0001-workflow-execution-model.md (Phase 2)
+              per-agent runtime config（YAML 级默认；workflow_nodes.config_json 覆盖）。
+              默认折叠 + 字段计数 badge：避免一上来 5 个子项占满首屏。
             -->
-            <NFormItem label="物理输出文件名" style="flex:1;">
-              <div style="display:flex;gap:6px;width:100%;align-items:center;">
-                <NInput
-                  v-model:value="agentForm.output_file"
-                  placeholder="如 spec.md"
-                  style="flex:1;"
-                />
-                <NButton
-                  size="tiny"
-                  type="tertiary"
-                  :disabled="!canAlignOutputFile"
-                  @click="alignOutputFileToOutputs"
-                >对齐到 outputs[0]</NButton>
-              </div>
-            </NFormItem>
-          </div>
-          <!--
-            Implements: .scratch/agent-ports-editor/PRD.md
-            helper 必须是内层 flex row 的兄弟节点（不在 row 内），
-            否则它会作为第三个 flex 子节点把两个 NFormItem 挤到 0 宽。
-            复测入口：ConfigView.test.ts ⑩。
-          -->
-          <NText depth="3" style="font-size:11px;">
-            写到 <code>storage/&lt;ws&gt;/&lt;featureId&gt;/此文件名</code>，与 outputs 正交：outputs 是逻辑端口名（用于画布连接和 prompt 引用）
-          </NText>
+            <NCollapseItem name="runtime">
+              <template #header>
+                <div class="agent-modal__section-header">
+                  <span class="agent-modal__section-title">运行时配置</span>
+                  <span
+                    v-if="runtimeCfgFieldCount > 0"
+                    class="agent-modal__section-badge"
+                  >{{ runtimeCfgFieldCount }}</span>
+                  <span class="agent-modal__section-hint">每 Agent 独立覆盖运行行为</span>
+                </div>
+              </template>
+              <NForm label-placement="top" :show-feedback="false" class="agent-modal__form">
+                <NFormItem label="运行时 ID（覆盖 default）">
+                  <NSelect
+                    :value="agentForm.config?.runtimeId ?? ''"
+                    :options="[{ label: '（使用默认）', value: '' }, ...runtimeOptions]"
+                    @update:value="(v: string) => { agentForm.config = { ...(agentForm.config ?? {}), runtimeId: v } }"
+                  />
+                </NFormItem>
+                <NFormItem label="环境变量">
+                  <div class="agent-modal__env-list">
+                    <div
+                      v-for="(entry, i) in agentEnvList"
+                      :key="i"
+                      class="agent-modal__env-row"
+                    >
+                      <NInput
+                        :value="entry.key"
+                        placeholder="KEY"
+                        size="small"
+                        style="flex:1;"
+                        @update:value="(v: string) => { entry.key = v }"
+                      />
+                      <NInput
+                        :value="entry.value"
+                        placeholder="value"
+                        size="small"
+                        style="flex:1;"
+                        @update:value="(v: string) => { entry.value = v }"
+                      />
+                      <NButton
+                        size="tiny"
+                        type="error"
+                        ghost
+                        @click="agentEnvList.splice(i, 1)"
+                      >✕</NButton>
+                    </div>
+                    <NButton
+                      size="tiny"
+                      @click="agentEnvList.push({ key: '', value: '' })"
+                    >+ 添加变量</NButton>
+                  </div>
+                </NFormItem>
+                <NFormItem label="工作目录 (cwd)">
+                  <NInput
+                    :value="agentForm.config?.cwd ?? ''"
+                    placeholder="留空则使用 <localPath>/repo"
+                    @update:value="(v: string) => { agentForm.config = { ...(agentForm.config ?? {}), cwd: v } }"
+                  />
+                </NFormItem>
+                <NFormItem label="超时 (ms)">
+                  <NInputNumber
+                    :value="agentForm.config?.timeoutMs"
+                    placeholder="留空则不超时"
+                    :min="1"
+                    style="width:100%;"
+                    @update:value="(v: number | null) => { agentForm.config = { ...(agentForm.config ?? {}), timeoutMs: v ?? undefined } }"
+                  />
+                </NFormItem>
+              </NForm>
+            </NCollapseItem>
 
-          <!--
-            Implements: .scratch/agent-ports-editor/PRD.md
-            端口契约编辑器：与画布 AgentNode 视觉一致，缩略预览 + 双 panel（输入 / 输出）。
-          -->
-          <NFormItem label="端口契约">
-            <PortsEditor
-              v-model:inputs="agentInputs"
-              v-model:outputs="agentOutputs"
-              style="width:100%;"
-            />
-          </NFormItem>
+            <!--
+              Implements: tasks.md#T028 / plan.md#D-03
+              memory_sediment：开启后该 Agent 在阶段执行结束时把状态摘要沉淀到 memory/MEMORY.md
+            -->
+            <NCollapseItem name="behavior">
+              <template #header>
+                <div class="agent-modal__section-header">
+                  <span class="agent-modal__section-title">行为选项</span>
+                  <span class="agent-modal__section-hint">执行时副作用</span>
+                </div>
+              </template>
+              <NFormItem label="记忆沉淀">
+                <NCheckbox v-model:checked="agentForm.memory_sediment">
+                  完成后把状态摘要写入 memory/MEMORY.md
+                </NCheckbox>
+              </NFormItem>
+            </NCollapseItem>
+          </NCollapse>
 
-          <!--
-            Implements: tasks.md#T028 / plan.md#D-03
-            memory_sediment：开启后该 Agent 在阶段执行结束时把状态摘要沉淀到 memory/MEMORY.md
-          -->
-          <NFormItem label="记忆沉淀">
-            <NCheckbox v-model:checked="agentForm.memory_sediment">
-              完成后把状态摘要写入 memory/MEMORY.md
-            </NCheckbox>
-          </NFormItem>
-
-          <!--
-            Implements: docs/adr/0001-workflow-execution-model.md (Phase 2)
-            per-agent runtime config（YAML 级默认；workflow_nodes.config_json 覆盖）
-          -->
-          <NFormItem label="运行时配置">
-            <NText depth="3" style="font-size:11px;">每 Agent 独立覆盖运行行为；per-node 在画布编辑时可进一步覆盖。</NText>
-          </NFormItem>
-          <NFormItem label="运行时 ID">
-            <NSelect
-              :value="agentForm.config?.runtimeId ?? ''"
-              :options="[{ label: '（使用默认）', value: '' }, ...runtimeOptions]"
-              @update:value="(v: string) => { agentForm.config = { ...(agentForm.config ?? {}), runtimeId: v } }"
-            />
-          </NFormItem>
-          <NFormItem label="环境变量">
-            <div style="display:flex;flex-direction:column;gap:6px;width:100%;">
-              <div v-for="(entry, i) in agentEnvList" :key="i" style="display:flex;gap:6px;align-items:center;">
-                <NInput
-                  :value="entry.key"
-                  placeholder="KEY"
-                  style="flex:1;"
-                  @update:value="(v: string) => { entry.key = v }"
-                />
-                <NInput
-                  :value="entry.value"
-                  placeholder="value"
-                  style="flex:1;"
-                  @update:value="(v: string) => { entry.value = v }"
-                />
-                <NButton size="tiny" type="error" ghost @click="agentEnvList.splice(i, 1)">✕</NButton>
-              </div>
-              <NButton size="tiny" @click="agentEnvList.push({ key: '', value: '' })">+ 添加变量</NButton>
-            </div>
-          </NFormItem>
-          <NFormItem label="工作目录 (cwd)">
-            <NInput
-              :value="agentForm.config?.cwd ?? ''"
-              placeholder="留空则使用 <localPath>/repo"
-              @update:value="(v: string) => { agentForm.config = { ...(agentForm.config ?? {}), cwd: v } }"
-            />
-          </NFormItem>
-          <NFormItem label="超时 (ms)">
-            <NInputNumber
-              :value="agentForm.config?.timeoutMs"
-              placeholder="留空则不超时"
-              :min="1"
-              style="width:100%;"
-              @update:value="(v: number | null) => { agentForm.config = { ...(agentForm.config ?? {}), timeoutMs: v ?? undefined } }"
-            />
-          </NFormItem>
-        </NForm>
-
-        <div style="margin-top:auto;padding-top:12px;">
-          <NSpace justify="end">
+          <!-- 操作栏：sticky 在 sidebar 底部 -->
+          <div class="agent-modal__actions">
             <NButton @click="agentModal = false">取消</NButton>
-            <NButton type="primary"
+            <NButton
+              type="primary"
               :loading="saving"
               :disabled="!agentForm.id.trim() || !agentForm.name.trim()"
-              @click="saveAgent">保存 Agent</NButton>
-          </NSpace>
-        </div>
-      </div>
+              @click="saveAgent"
+            >保存 Agent</NButton>
+          </div>
+        </aside>
 
-      <!-- 右：指令内容编辑器 -->
-      <div style="flex:1;display:flex;flex-direction:column;overflow:hidden;background:#1e1e2e;">
-        <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 16px;border-bottom:1px solid #2d2d3f;background:#1a1a2e;flex-shrink:0;">
-          <NText style="color:#94a3b8;font-size:13px;">指令内容</NText>
-          <NText style="color:#555;font-size:11px;">点击「保存 Agent」后内容随配置一起保存</NText>
-        </div>
-        <div style="flex:1;overflow:hidden;">
-          <MarkdownEditor v-model="agentForm.instruction" style="height:100%;border-radius:0;border:none;" />
-        </div>
+        <!-- 右 editor -->
+        <section class="agent-modal__editor">
+          <div class="agent-modal__editor-bar">
+            <span class="agent-modal__editor-title">指令内容</span>
+            <span class="agent-modal__editor-meta">
+              {{ agentForm.instruction.length.toLocaleString() }} 字符
+              <span v-if="isDirty" class="agent-modal__editor-dirty">· 未保存</span>
+            </span>
+          </div>
+          <div class="agent-modal__editor-host">
+            <MarkdownEditor
+              v-model="agentForm.instruction"
+              style="height:100%;border-radius:0;border:none;"
+            />
+          </div>
+        </section>
       </div>
     </div>
   </NModal>
@@ -720,6 +855,240 @@ defineExpose({
   列表卡片上的 mini 端口胶囊：颜色 token 与 AgentNode / PortsEditor 共用。
 -->
 <style scoped>
+/*
+  Implements: agent 编辑弹层视觉（LangGraph / n8n 节点 drawer 风）
+  - 暗色 header 与亮色 sidebar 形成 step-down 视觉层级
+  - collapsible section header 用小一号灰字 + hint；active 时左侧 2px 强调条
+  - dirty chip 用品牌橙，与「未保存」语义一致
+  - 排版间距统一 8/12/16，section 内表单 12px gap，与全局 8px 栅格对齐
+*/
+.agent-modal {
+  display: flex;
+  flex-direction: column;
+  width: 92vw;
+  max-width: 1180px;
+  height: 84vh;
+  overflow: hidden;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.18);
+}
+
+/* 顶 header */
+.agent-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 48px;
+  padding: 0 16px 0 20px;
+  background: #18181b;
+  color: #e4e4e7;
+  flex-shrink: 0;
+}
+.agent-modal__title-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.agent-modal__crumb {
+  font-size: 13px;
+  font-weight: 600;
+  color: #e4e4e7;
+}
+.agent-modal__id {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  color: #a1a1aa;
+}
+.agent-modal__badge {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: #2563eb;
+  color: #fff;
+}
+.agent-modal__dirty {
+  font-size: 11px;
+  color: #fb923c;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.agent-modal__close {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: #a1a1aa;
+  cursor: pointer;
+  font-size: 14px;
+  border-radius: 4px;
+}
+.agent-modal__close:hover {
+  background: #27272a;
+  color: #fff;
+}
+
+/* 主体 */
+.agent-modal__body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+/* 左 sidebar */
+.agent-modal__sidebar {
+  width: 400px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid #efeff5;
+  background: #fafafa;
+}
+.agent-modal__collapse {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+.agent-modal__collapse :deep(.n-collapse-item__header-main) {
+  flex: 1;
+  min-width: 0;
+}
+.agent-modal__collapse :deep(.n-collapse-item) {
+  --n-title-text-color: #27272a;
+  --n-title-font-weight: 600;
+  --n-header-padding: 10px 16px;
+}
+.agent-modal__collapse :deep(.n-collapse-item__content-inner) {
+  padding: 4px 16px 16px;
+}
+
+.agent-modal__section-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+}
+.agent-modal__section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #27272a;
+  flex-shrink: 0;
+}
+.agent-modal__section-hint {
+  font-size: 11px;
+  color: #71717a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.agent-modal__section-badge {
+  font-size: 10px;
+  font-weight: 700;
+  background: #e4e4e7;
+  color: #3f3f46;
+  padding: 1px 6px;
+  border-radius: 8px;
+  flex-shrink: 0;
+  min-width: 18px;
+  text-align: center;
+}
+
+/* 表单内部 */
+.agent-modal__form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.agent-modal__row {
+  display: flex;
+  gap: 10px;
+}
+.agent-modal__input-group {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+  align-items: center;
+}
+.agent-modal__helper {
+  font-size: 11px;
+  line-height: 1.5;
+}
+.agent-modal__helper code {
+  background: #f4f4f5;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 10.5px;
+}
+
+.agent-modal__env-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+.agent-modal__env-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+/* 操作栏：sticky 底部 */
+.agent-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid #efeff5;
+  background: #fff;
+  flex-shrink: 0;
+}
+
+/* 右 editor */
+.agent-modal__editor {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: #1e1e2e;
+}
+.agent-modal__editor-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 16px;
+  height: 36px;
+  border-bottom: 1px solid #2d2d3f;
+  background: #18181b;
+  flex-shrink: 0;
+}
+.agent-modal__editor-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #d4d4d8;
+}
+.agent-modal__editor-meta {
+  font-size: 11px;
+  color: #71717a;
+  font-family: ui-monospace, monospace;
+}
+.agent-modal__editor-dirty {
+  color: #fb923c;
+}
+.agent-modal__editor-host {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/*
+  列表卡片上的 mini 端口胶囊：颜色 token 与 AgentNode / PortsEditor 共用。
+*/
 .port-mini {
   display: inline-flex;
   align-items: center;

@@ -172,7 +172,7 @@ describe('ConfigView (slice 9) — 端口契约编辑入口', () => {
     expect(text).toContain('与 outputs 正交')
   })
 
-  it('③ 「对齐到 outputs[0]」按钮在 outputs 为空时 disabled', async () => {
+  it('③ 「对齐 outputs[0]」按钮在 outputs 为空时 disabled', async () => {
     const agent = {
       id: 'spec', name: 'Spec', runtime: 'claude',
       instruction: '', output_file: 'spec.md',
@@ -180,12 +180,12 @@ describe('ConfigView (slice 9) — 端口契约编辑入口', () => {
     } as any
     const w = await trackMount([agent])
     await openEditAgentModal(w)
-    const alignBtn = findModalButton('对齐到 outputs[0]')!
+    const alignBtn = findModalButton('对齐 outputs[0]')!
     expect(alignBtn).toBeDefined()
     expect(alignBtn?.disabled).toBe(true)
   })
 
-  it('④ 「对齐到 outputs[0]」按钮在 outputs[0] !== output_file 时 enabled，点击后复制', async () => {
+  it('④ 「对齐 outputs[0]」按钮在 outputs[0] !== output_file 时 enabled，点击后复制', async () => {
     const agent = {
       id: 'spec', name: 'Spec', runtime: 'claude',
       instruction: '', output_file: 'old-name.md',
@@ -193,7 +193,7 @@ describe('ConfigView (slice 9) — 端口契约编辑入口', () => {
     } as any
     const w = await trackMount([agent])
     await openEditAgentModal(w)
-    const alignBtn = findModalButton('对齐到 outputs[0]')!
+    const alignBtn = findModalButton('对齐 outputs[0]')!
     expect(alignBtn?.disabled).toBe(false)
     alignBtn?.click()
     await flushPromises()
@@ -201,7 +201,7 @@ describe('ConfigView (slice 9) — 端口契约编辑入口', () => {
     expect(cv.vm.agentForm.output_file).toBe('spec.md')
   })
 
-  it('⑤ 「对齐到 outputs[0]」按钮在 outputs[0] === output_file 时 disabled', async () => {
+  it('⑤ 「对齐 outputs[0]」按钮在 outputs[0] === output_file 时 disabled', async () => {
     const agent = {
       id: 'spec', name: 'Spec', runtime: 'claude',
       instruction: '', output_file: 'spec.md',
@@ -209,7 +209,7 @@ describe('ConfigView (slice 9) — 端口契约编辑入口', () => {
     } as any
     const w = await trackMount([agent])
     await openEditAgentModal(w)
-    const alignBtn = findModalButton('对齐到 outputs[0]')!
+    const alignBtn = findModalButton('对齐 outputs[0]')!
     expect(alignBtn?.disabled).toBe(true)
   })
 
@@ -272,6 +272,8 @@ describe('ConfigView (slice 9) — 端口契约编辑入口', () => {
   // 内层 display:flex row，使得该 row 有 3 个 flex 子节点；helper 的自然宽度
   // (~244px) 加上 gap 把两个 NFormItem 各自挤到 0 宽 → 输入框看不见。
   // 修后 helper 应作为该 row 的兄弟节点存在（不在 row 内），row 只有 2 个子节点。
+  // 当前结构：基础信息 section 内 NForm 里有两个 .agent-modal__row，第一个是 ID+Name，
+  // 第二个是「运行时类型 + 物理输出文件名」+ 末尾 helper 文本（现在是 NForm 的子节点）。
   it('⑩ 「运行时 / 物理输出文件名」行的 flex row 只含两个 NFormItem', async () => {
     const agent = {
       id: 'spec', name: 'Spec', runtime: 'claude',
@@ -280,17 +282,14 @@ describe('ConfigView (slice 9) — 端口契约编辑入口', () => {
     } as any
     const w = await trackMount([agent])
     await openEditAgentModal(w)
-    // 找「物理输出文件名」input，沿 DOM 上溯到所属的 n-form-item wrapper
+    // 找「物理输出文件名」input，沿 DOM 上溯到所属的 .agent-modal__row
     const input = Array.from(document.body.querySelectorAll('input'))
       .find((i) => i.placeholder === '如 spec.md')!
     expect(input).toBeDefined()
-    const formItem = input.closest('.n-form-item') as HTMLElement
-    expect(formItem).not.toBeNull()
-    // formItem 的直接父节点就是那个 display:flex 的 row
-    const flexRow = formItem.parentElement as HTMLElement
+    const flexRow = input.closest('.agent-modal__row') as HTMLElement
     expect(flexRow).not.toBeNull()
     expect(getComputedStyle(flexRow).display).toBe('flex')
-    // 关键断言：row 只装两个 NFormItem，helper 不应在此
+    // 关键断言：row 只装两个 NFormItem，helper 不应在此（helper 在 NForm 里 row 外）
     expect(flexRow.children.length).toBe(2)
     expect(flexRow.querySelectorAll(':scope > .n-form-item').length).toBe(2)
   })

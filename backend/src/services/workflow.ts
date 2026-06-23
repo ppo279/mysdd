@@ -3,8 +3,23 @@
 // 不直接访问 DB；调用方传入从 workflow_nodes / workflow_edges 取出的 plain objects。
 // 节点拓扑顺序以"workflow_nodes 行顺序"为稳定排序（外层 SELECT 时按 id 字典序即可，
 // 但本模块只接受 plain input，不做 DB 排序假设）。
+import { z } from 'zod'
 import { BizError, Code } from '../lib/envelope.js'
 import { getAgentConfig } from '../config/agents.js'
+
+// Implements: docs/prds/agent-side-output-via-mcp.md (Slice 1a)
+// workflow_nodes.config_json 的内容 schema。Phase 1 仅字段解析，不强制存在；
+// 未知字段 .passthrough() 透传（向后兼容既有 per-node 覆盖）。
+// Phase 2 起再加严：禁止覆盖 agent 声明的字段。
+export const NodeConfigJsonSchema = z
+  .object({
+    // Implements: docs/prds/agent-side-output-via-mcp.md (Slice 3 路径)
+    // per-node MCP server 配置覆盖；缺省回退到 workspace 默认。
+    // 绝对路径；运行时由 services/agent.ts 起 server 时校验。
+    mcpConfigPath: z.string().optional(),
+  })
+  .passthrough()
+export type NodeConfigJson = z.infer<typeof NodeConfigJsonSchema>
 
 export interface WorkflowNodeRow {
   nodeId: string
@@ -315,7 +330,7 @@ export function validateWorkflowPorts(
  * 但 ports（outputs/inputs）的覆盖已被废弃——agent.config 是唯一真相之源。
  *
  * 校验：传入 configJson 字符串里若含 `outputs` 或 `inputs` 键 → 抛 BizError。
- * 其它字段（如 displayName、position 等）合法保留。
+ * 其它字段（如 displayName、mcpConfigPath 等）合法保留（NodeConfigJsonSchema 透传）。
  */
 export function rejectPortOverrideInConfigJson(
   configJson: string,
@@ -332,6 +347,10 @@ export function rejectPortOverrideInConfigJson(
       400,
     )
   }
+  // Implements: docs/prds/agent-side-output-via-mcp.md (Slice 1a)
+  // 仅字段解析与透传；运行时由 services/agent.ts 解析 mcpConfigPath 找 server。
+  // 此处不抛错——NodeConfigJsonSchema.passthrough() 接受任意未知键。
+  NodeConfigJsonSchema.safeParse(parsed)
 }
 
 /** 返回进入 nodeId 的所有边（包含 fromOutput / toInput 信息）。 */

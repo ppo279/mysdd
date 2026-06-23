@@ -134,6 +134,17 @@ export const SCHEMA_SQL = `
       UNIQUE(position)
     );
 
+    -- Implements: docs/prds/agent-side-output-via-mcp.md (Slice 1a)
+    CREATE TABLE IF NOT EXISTS artifact_types (
+      id          TEXT PRIMARY KEY,
+      name        TEXT NOT NULL DEFAULT '',
+      schema_ref  TEXT,
+      position    INTEGER NOT NULL DEFAULT 0,
+      created_at  INTEGER NOT NULL,
+      updated_at  INTEGER NOT NULL,
+      UNIQUE(position)
+    );
+
     CREATE TABLE IF NOT EXISTS runtimes (
       id        TEXT PRIMARY KEY,
       type      TEXT NOT NULL,
@@ -172,4 +183,8 @@ export const IDEMPOTENT_ALTERS: string[] = [
   `ALTER TABLE workflows ADD COLUMN inputs_json TEXT NOT NULL DEFAULT '[]'`,
   `ALTER TABLE workflows ADD COLUMN rejection_edges_json TEXT NOT NULL DEFAULT '[]'`,
   `ALTER TABLE workflows ADD COLUMN settings_json TEXT NOT NULL DEFAULT '{}'`,
+  // Implements: docs/prds/agent-side-output-via-mcp.md (Slice 1a)
+  // 老 DB 升级：补 agents.tools_reads_json / tools_writes_json 两列。
+  `ALTER TABLE agents ADD COLUMN tools_reads_json TEXT NOT NULL DEFAULT '[]'`,
+  `ALTER TABLE agents ADD COLUMN tools_writes_json TEXT NOT NULL DEFAULT '[]'`,
 ]

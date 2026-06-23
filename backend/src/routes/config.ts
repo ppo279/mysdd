@@ -36,6 +36,12 @@ const AgentSchema = z.object({
   inputs: z.array(z.string()).optional(),
   // Implements: tasks.md#T028 / plan.md#D-03
   memory_sediment: z.boolean().optional(),
+  // Implements: docs/prds/agent-side-output-via-mcp.md (Slice 1a)
+  // Phase 1 仅字段解析；cross-ref 校验留给 Slice 1b（zod .superRefine）。
+  tools: z.object({
+    reads: z.array(z.string()).default([]),
+    writes: z.array(z.string()).default([]),
+  }).optional(),
 })
 
 const BaseLayerSchema = z.object({
@@ -43,8 +49,17 @@ const BaseLayerSchema = z.object({
   content: z.string().default(''),
 })
 
+// Implements: docs/prds/agent-side-output-via-mcp.md (Slice 1a)
+const ArtifactTypeSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().default(''),
+  // 相对路径，Phase 1 仅字段声明；MCP server write 时懒加载。
+  schema_ref: z.string().optional(),
+})
+
 const GlobalSchema = z.object({
   base_layers: z.array(BaseLayerSchema).default([]),
+  artifact_types: z.array(ArtifactTypeSchema).default([]),
 })
 
 const AgentsYamlSchema = z.object({
@@ -64,7 +79,11 @@ export async function configRoutes(app: FastifyInstance) {
     // 注意：这里返回的形状与 PUT 入参一致；ConfigView 用 PUT 后 GET 对比即可。
     const out = {
       runtimes: data.runtimes.map((r) => ({ id: r.id, type: r.type, command: r.command })),
-      global: data.global,
+      global: {
+        base_layers: data.global.base_layers,
+        // Implements: docs/prds/agent-side-output-via-mcp.md (Slice 1a)
+        artifact_types: data.global.artifact_types ?? [],
+      },
       agents: data.agents.map((a) => ({
         id: a.id,
         name: a.name,
@@ -75,6 +94,8 @@ export async function configRoutes(app: FastifyInstance) {
         inputs: a.inputs,
         memory_sediment: a.memory_sediment,
         config: a.config,
+        // Implements: docs/prds/agent-side-output-via-mcp.md (Slice 1a)
+        tools: a.tools,
       })),
     }
     return ok(reply, out)
@@ -85,7 +106,7 @@ export async function configRoutes(app: FastifyInstance) {
   app.put('/api/config/agents', async (req, reply) => {
     const body = AgentsYamlSchema.parse(req.body)
     const { db } = await import('../db/index.js')
-    const { runtimes, baseLayers, agents } = await import('../db/schema.js')
+    const { runtimes, baseLayers, artifactTypes, agents } = await import('../db/schema.js')
 
     const now = new Date()
 
@@ -93,6 +114,7 @@ export async function configRoutes(app: FastifyInstance) {
     // INSERT 顺序 runtimes 先（FK 满足）。
     db.transaction((tx) => {
       tx.delete(agents).run()
+      tx.delete(artifactTypes).run()
       tx.delete(baseLayers).run()
       tx.delete(runtimes).run()
 
@@ -104,13 +126,26 @@ export async function configRoutes(app: FastifyInstance) {
         }).run()
       }
 
-      let pos = 0
+      let blPos = 0
       for (const b of body.global.base_layers) {
         tx.insert(baseLayers).values({
           id: randomUUID(),
           name: b.name,
           content: b.content,
-          position: pos++,
+          position: blPos++,
+          createdAt: now,
+          updatedAt: now,
+        }).run()
+      }
+
+      // Implements: docs/prds/agent-side-output-via-mcp.md (Slice 1a)
+      let atPos = 0
+      for (const t of body.global.artifact_types ?? []) {
+        tx.insert(artifactTypes).values({
+          id: t.id,
+          name: t.name || t.id,
+          schemaRef: t.schema_ref ?? null,
+          position: atPos++,
           createdAt: now,
           updatedAt: now,
         }).run()
@@ -126,6 +161,9 @@ export async function configRoutes(app: FastifyInstance) {
           outputsJson: JSON.stringify(a.outputs ?? ['default']),
           memorySediment: a.memory_sediment ? 1 : 0,
           configJson: JSON.stringify({}), // PUT 既有形状不收 config；空 map 默认
+          // Implements: docs/prds/agent-side-output-via-mcp.md (Slice 1a)
+          toolsReadsJson: JSON.stringify(a.tools?.reads ?? []),
+          toolsWritesJson: JSON.stringify(a.tools?.writes ?? []),
           createdAt: now,
           updatedAt: now,
         }).run()

@@ -162,6 +162,21 @@ export const baseLayers = sqliteTable('base_layers', {
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
 })
 
+// Implements: docs/prds/agent-side-output-via-mcp.md (Slice 1a)
+// 全局 artifact 类型声明。Phase 1 仅字段解析；cross-ref 校验（tools.reads/writes
+// 必须 ∈ artifact_types）由 Slice 1b 用 zod .superRefine() 实现。
+// position 决定拼接顺序（与 base_layers 同模式）。
+export const artifactTypes = sqliteTable('artifact_types', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull().default(''),
+  // 相对路径，指向 ../schemas/<id>.schema.ts；Phase 1 仅声明字段，不在启动期 import。
+  // write_artifact 触发时由 MCP server 懒加载（见 PRD §Schema 校验 Phase 1 行为）。
+  schemaRef: text('schema_ref'),
+  position: integer('position').notNull().default(0),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
+})
+
 export const agents = sqliteTable('agents', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),
@@ -176,6 +191,11 @@ export const agents = sqliteTable('agents', {
   // memory_sediment 0/1（SQLite 无原生 bool）
   memorySediment: integer('memory_sediment').notNull().default(0),
   configJson: text('config_json').notNull().default('{}'),
+  // Implements: docs/prds/agent-side-output-via-mcp.md (Slice 1a)
+  // tools.reads / tools.writes JSON 字符串数组形状；缺省 []。
+  // Phase 1 仅字段解析与存取，运行时 ACL 不强制（agent 不声明 tools 时全读全写老语义）。
+  toolsReadsJson: text('tools_reads_json').notNull().default('[]'),
+  toolsWritesJson: text('tools_writes_json').notNull().default('[]'),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
 })

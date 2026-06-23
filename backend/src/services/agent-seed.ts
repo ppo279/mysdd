@@ -10,12 +10,16 @@
 
 import { asc } from 'drizzle-orm'
 import { db } from '../db/index.js'
-import { runtimes, baseLayers, agents } from '../db/schema.js'
+import { runtimes, baseLayers, artifactTypes, agents } from '../db/schema.js'
 
 /** 测试 fixture 形状（与生产 yaml 形状 1:1 对齐；少了一个 output_file 字段）。 */
 export interface AgentsFixture {
   runtimes: Array<{ id: string; type: string; command?: string }>
-  global: { base_layers: Array<{ name: string; content: string }> }
+  global: {
+    base_layers: Array<{ name: string; content: string }>
+    // Implements: docs/prds/agent-side-output-via-mcp.md (Slice 1a)
+    artifact_types?: Array<{ id: string; name?: string; schema_ref?: string }>
+  }
   agents: Array<{
     id: string
     name?: string
@@ -26,6 +30,8 @@ export interface AgentsFixture {
     config?: Record<string, unknown>
     inputs?: string[]
     outputs?: string[]
+    // Implements: docs/prds/agent-side-output-via-mcp.md (Slice 1a)
+    tools?: { reads?: string[]; writes?: string[] }
   }>
 }
 
@@ -33,14 +39,15 @@ export interface AgentsFixture {
  * 把 fixture 对象写入三张表。
  * 使用 better-sqlite3 同步 transaction：失败回滚到调用前状态。
  *
- * INSERT 顺序：runtimes → base_layers → agents（agents 有 FK runtime_id）。
+ * INSERT 顺序：runtimes → base_layers → artifact_types → agents（agents 有 FK runtime_id）。
  * 不写 ON CONFLICT：若半成品存在先 DELETE 三表清场再 INSERT——避免 FK 顺序问题。
  */
 function writeAllToDb(data: AgentsFixture, now: Date): void {
   db.transaction((tx) => {
-    // DELETE 顺序：agents 先（FK 引用 runtimes）→ base_layers → runtimes。
+    // DELETE 顺序：agents 先（FK 引用 runtimes）→ artifact_types → base_layers → runtimes。
     // 反过来 DELETE FROM runtimes 会被 FK RESTRICT 拦下。
     tx.delete(agents).run()
+    tx.delete(artifactTypes).run()
     tx.delete(baseLayers).run()
     tx.delete(runtimes).run()
 
@@ -48,13 +55,26 @@ function writeAllToDb(data: AgentsFixture, now: Date): void {
       tx.insert(runtimes).values({ id: r.id, type: r.type, command: r.command ?? '' }).run()
     }
 
-    let pos = 0
+    let blPos = 0
     for (const b of data.global.base_layers) {
       tx.insert(baseLayers).values({
         id: crypto.randomUUID(),
         name: b.name,
         content: b.content,
-        position: pos++,
+        position: blPos++,
+        createdAt: now,
+        updatedAt: now,
+      }).run()
+    }
+
+    // Implements: docs/prds/agent-side-output-via-mcp.md (Slice 1a)
+    let atPos = 0
+    for (const t of data.global.artifact_types ?? []) {
+      tx.insert(artifactTypes).values({
+        id: t.id,
+        name: t.name ?? t.id,
+        schemaRef: t.schema_ref ?? null,
+        position: atPos++,
         createdAt: now,
         updatedAt: now,
       }).run()
@@ -68,6 +88,8 @@ function writeAllToDb(data: AgentsFixture, now: Date): void {
         throw new Error(`fixture: agent "${a.id}" memory_sediment must be boolean or undefined (got ${typeof a.memory_sediment})`)
       }
       if (a.config !== undefined) validateAgentConfigShape(a.id, a.config)
+      // Slice 1a: tools 形状校验（fail-fast：read/write 必须是字符串数组）
+      validateAgentToolsShape(a.id, a.tools)
 
       tx.insert(agents).values({
         id: a.id,
@@ -79,6 +101,9 @@ function writeAllToDb(data: AgentsFixture, now: Date): void {
         outputsJson: JSON.stringify(a.outputs ?? []),
         memorySediment: a.memory_sediment ? 1 : 0,
         configJson: JSON.stringify(a.config ?? {}),
+        // Implements: docs/prds/agent-side-output-via-mcp.md (Slice 1a)
+        toolsReadsJson: JSON.stringify(a.tools?.reads ?? []),
+        toolsWritesJson: JSON.stringify(a.tools?.writes ?? []),
         createdAt: now,
         updatedAt: now,
       }).run()
@@ -120,6 +145,27 @@ function validateAgentConfigShape(agentId: string, v: unknown): void {
   }
 }
 
+// Implements: docs/prds/agent-side-output-via-mcp.md (Slice 1a)
+// 校验 tools 形状：reads/writes 必须是字符串数组（undefined 视为 []）。
+// cross-ref 校验（必须 ∈ global.artifact_types）留给 Slice 1b 的 zod .superRefine()。
+function validateAgentToolsShape(agentId: string, v: unknown): void {
+  if (v === undefined) return
+  if (!v || typeof v !== 'object') {
+    throw new Error(`fixture: agent "${agentId}" has invalid \`tools\` shape`)
+  }
+  const obj = v as Record<string, unknown>
+  if (obj.reads !== undefined) {
+    if (!Array.isArray(obj.reads) || !obj.reads.every((x) => typeof x === 'string')) {
+      throw new Error(`fixture: agent "${agentId}" tools.reads must be string[]`)
+    }
+  }
+  if (obj.writes !== undefined) {
+    if (!Array.isArray(obj.writes) || !obj.writes.every((x) => typeof x === 'string')) {
+      throw new Error(`fixture: agent "${agentId}" tools.writes must be string[]`)
+    }
+  }
+}
+
 /**
  * 单元测试 / 集成测试用：注入一个 fixture 对象，走与生产相同的写入路径。
  * 总是强制写（先清空三表）。
@@ -131,11 +177,12 @@ export function seedAgentsFixture(fixture: AgentsFixture): boolean {
 }
 
 /**
- * 单测 / 集成用：清空三张表。便于每个测试重置。
+ * 单测 / 集成用：清空四张表。便于每个测试重置。
  */
 export function clearAgentsTables(): void {
   db.transaction((tx) => {
     tx.delete(agents).run()
+    tx.delete(artifactTypes).run()
     tx.delete(baseLayers).run()
     tx.delete(runtimes).run()
   })
@@ -153,17 +200,27 @@ export function loadAgentsFromDb(): AgentsFixture & {
 } {
   const rts = db.select().from(runtimes).orderBy(asc(runtimes.id)).all()
   const bls = db.select().from(baseLayers).orderBy(asc(baseLayers.position)).all()
+  const ats = db.select().from(artifactTypes).orderBy(asc(artifactTypes.position)).all()
   const ags = db.select().from(agents).orderBy(asc(agents.id)).all()
   return {
     runtimes: rts.map((r) => ({ id: r.id, type: r.type, command: r.command })),
     global: {
       base_layers: bls.map((b) => ({ name: b.name, content: b.content })),
+      // Implements: docs/prds/agent-side-output-via-mcp.md (Slice 1a)
+      artifact_types: ats.map((t) => ({
+        id: t.id,
+        name: t.name,
+        schema_ref: t.schemaRef ?? undefined,
+      })),
     },
     agents: ags.map((a) => {
       // slice 07：缺省归一化为 []（"agent 没声明任何 port" 的语义）。
       let inputs: string[] = []
       let outputs: string[] = []
       let config: Record<string, unknown> = {}
+      // Slice 1a：tools.reads/writes 同模式归一化。
+      let reads: string[] = []
+      let writes: string[] = []
       try {
         const parsedInputs = JSON.parse(a.inputsJson)
         if (Array.isArray(parsedInputs)) inputs = parsedInputs.filter((x): x is string => typeof x === 'string')
@@ -176,6 +233,18 @@ export function loadAgentsFromDb(): AgentsFixture & {
         const parsedConfig = JSON.parse(a.configJson)
         if (parsedConfig && typeof parsedConfig === 'object') config = parsedConfig as Record<string, unknown>
       } catch { /* fall back to default */ }
+      try {
+        const parsedReads = JSON.parse(a.toolsReadsJson)
+        if (Array.isArray(parsedReads)) reads = parsedReads.filter((x): x is string => typeof x === 'string')
+      } catch { /* fall back to default */ }
+      try {
+        const parsedWrites = JSON.parse(a.toolsWritesJson)
+        if (Array.isArray(parsedWrites)) writes = parsedWrites.filter((x): x is string => typeof x === 'string')
+      } catch { /* fall back to default */ }
+      // 仅当非空时返回 tools 字段（与"未声明 = 老语义"对齐）
+      const tools = (reads.length > 0 || writes.length > 0)
+        ? { reads, writes }
+        : undefined
       return {
         id: a.id,
         name: a.name,
@@ -186,6 +255,7 @@ export function loadAgentsFromDb(): AgentsFixture & {
         config,
         inputs,
         outputs,
+        tools,
       }
     }),
   }
