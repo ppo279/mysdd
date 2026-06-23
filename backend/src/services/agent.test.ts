@@ -8,6 +8,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import Database from 'better-sqlite3'
 import { drizzle } from 'drizzle-orm/better-sqlite3'
 import * as schema from '../db/schema.js'
+import { SCHEMA_SQL, IDEMPOTENT_ALTERS } from '../db/schema-sql.js'
 import path from 'path'
 import fs from 'fs'
 import os from 'os'
@@ -32,6 +33,7 @@ vi.mock('../runtime/registry.js', () => ({
 const { mockAgentConfigs } = vi.hoisted(() => ({ mockAgentConfigs: {} as Record<string, { config?: any }> }))
 vi.mock('../config/agents.js', () => ({
   buildSystemPrompt: () => 'mocked-system-prompt',
+  buildResumeSystemPrompt: () => 'mocked-resume-system-prompt',
   buildEdgeBasedContext: () => '',
   getSedimentEnabledAgents: () => [],
   getAgentConfig: (id: string) => {
@@ -56,81 +58,11 @@ vi.mock('../db/index.js', () => ({
 
 const sqlite = new Database(':memory:')
 sqlite.pragma('foreign_keys = ON')
-sqlite.exec(`
-  CREATE TABLE workspaces (
-    id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
-    repo_url TEXT NOT NULL DEFAULT '', tech_stack TEXT NOT NULL DEFAULT 'ts',
-    background TEXT NOT NULL DEFAULT '', local_path TEXT NOT NULL DEFAULT '',
-    default_workflow_id TEXT,
-    created_at INTEGER NOT NULL
-  );
-  CREATE TABLE features (
-    id TEXT PRIMARY KEY,
-    workspace_id TEXT NOT NULL REFERENCES workspaces(id),
-    name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
-    current_stage TEXT NOT NULL DEFAULT 'spec',
-    current_workflow_id TEXT,
-    current_node_id TEXT NOT NULL DEFAULT 'spec',
-    status TEXT NOT NULL DEFAULT 'active',
-    created_at INTEGER NOT NULL
-  );
-  CREATE TABLE stage_runs (
-    id TEXT PRIMARY KEY, feature_id TEXT NOT NULL REFERENCES features(id),
-    stage TEXT NOT NULL, node_id TEXT,
-    runtime_id TEXT NOT NULL DEFAULT 'claude', cli_session_id TEXT,
-    status TEXT NOT NULL DEFAULT 'active', artifact_content TEXT NOT NULL DEFAULT '',
-    artifact_path TEXT NOT NULL DEFAULT '',
-    -- slice 04：startStage 把 agent.instruction 写到此处；resume 路径用 snapshot 而非 live agent 行
-    instruction_snapshot TEXT,
-    created_at INTEGER NOT NULL, approved_at INTEGER
-  );
-  CREATE TABLE messages (
-    id TEXT PRIMARY KEY, stage_run_id TEXT NOT NULL REFERENCES stage_runs(id),
-    role TEXT NOT NULL, content TEXT NOT NULL,
-    thinking TEXT,
-    created_at INTEGER NOT NULL
-  );
-  CREATE TABLE workflows (
-    id TEXT PRIMARY KEY,
-    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-    name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
-    is_archived INTEGER NOT NULL DEFAULT 0,
-    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
-  );
-  CREATE TABLE workflow_nodes (
-    id TEXT PRIMARY KEY,
-    workflow_id TEXT NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
-    node_id TEXT NOT NULL, agent_id TEXT NOT NULL,
-    position_x REAL NOT NULL DEFAULT 0, position_y REAL NOT NULL DEFAULT 0,
-    config_json TEXT NOT NULL DEFAULT '{}',
-    display_name TEXT NOT NULL DEFAULT '',
-    created_at INTEGER NOT NULL,
-    UNIQUE(workflow_id, node_id)
-  );
-  CREATE TABLE workflow_edges (
-    id TEXT PRIMARY KEY,
-    workflow_id TEXT NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
-    from_node_id TEXT NOT NULL, from_output TEXT NOT NULL DEFAULT 'default',
-    to_node_id TEXT NOT NULL, to_input TEXT NOT NULL DEFAULT 'default',
-    created_at INTEGER NOT NULL
-  );
-  CREATE TABLE stage_run_outputs (
-    id TEXT PRIMARY KEY,
-    stage_run_id TEXT NOT NULL REFERENCES stage_runs(id) ON DELETE CASCADE,
-    output_name TEXT NOT NULL DEFAULT 'default',
-    content TEXT NOT NULL DEFAULT '',
-    approved_at INTEGER,
-    UNIQUE(stage_run_id, output_name)
-  );
-  CREATE TABLE feature_node_states (
-    feature_id TEXT NOT NULL REFERENCES features(id) ON DELETE CASCADE,
-    node_id TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending',
-    last_stage_run_id TEXT,
-    updated_at INTEGER NOT NULL,
-    PRIMARY KEY (feature_id, node_id)
-  );
-`)
+sqlite.exec(SCHEMA_SQL)
+// Apply initDb's idempotent ALTERs (matches production startup).
+for (const sql of IDEMPOTENT_ALTERS) {
+  try { sqlite.exec(sql) } catch { /* already exists */ }
+}
 ;(globalThis as any).__testDb = drizzle(sqlite, { schema })
 
 const { AgentService } = await import('./agent.js')
@@ -142,7 +74,13 @@ beforeEach(() => {
   mockRuntime.createSession.mockReset()
   mockRuntime.resumeSession.mockReset()
   ;(globalThis as any).__mockAgentConfigs = {}
+  // Disable FK during cleanup so previous tests' leftover rows (if any) can be
+  // cleared even when their parent FK references are already gone. The
+  // schema enables FK_PRAGMA at connection time; per-test reset of state
+  // here doesn't need to enforce it.
+  sqlite.pragma('foreign_keys = OFF')
   sqlite.exec(`
+    DELETE FROM feature_node_migrations;
     DELETE FROM feature_node_states;
     DELETE FROM stage_run_outputs;
     DELETE FROM messages;
@@ -152,7 +90,12 @@ beforeEach(() => {
     DELETE FROM workflows;
     DELETE FROM features;
     DELETE FROM workspaces;
+    DELETE FROM agents;
+    DELETE FROM runtimes;
+    DELETE FROM base_layers;
+    DELETE FROM artifact_types;
   `)
+  sqlite.pragma('foreign_keys = ON')
 })
 
 afterEach(() => {
@@ -918,5 +861,101 @@ describe('slice 04: instruction_snapshot 写入', () => {
       { instruction_snapshot: string | null }
     expect(row.instruction_snapshot).toBe('OLD INSTRUCTION')
     expect(row.instruction_snapshot).not.toBe('NEW INSTRUCTION')
+  })
+})
+
+// Implements: .scratch/agent-contract-db/issues/04-runtime-contract.md
+// slice 04：approveStage 校验 outputName ∈ agent.outputs —— 拒绝任何不在
+// agent 声明里的 key（避免 typo 污染产物路径）；同时校验 content 非空。
+// 同时：resume 路径 sendMessage 喂给 runtime 的 prompt 来自 snapshot 而非 live agent。
+
+describe('slice 04: approveStage outputName 校验', () => {
+  it('outputName 不在 agent.outputs → 抛 400 + 列出非法 key', async () => {
+    const wsId = 'ws-aok-1'
+    const featId = 'feat-aok-1'
+    const runId = 'run-aok-1'
+    insertWorkspace(wsId, path.join(tmpRoot, wsId))
+    insertFeature(featId, wsId)
+    seedWorkflow(wsId)
+    insertStageRun(runId, featId, 'spec', 'cli-sess', 'spec')
+
+    // 默认 mockAgentConfigs[spec].outputs = ['default'] —— 'wrong.md' 不在列表里
+    await expect(
+      AgentService.approveStage(runId, { 'wrong.md': '# oops' }, wsId, featId),
+    ).rejects.toThrow(/wrong\.md/)
+  })
+
+  it('outputName ∈ agent.outputs 但 content 是空串 → 抛 400 + 列出空 key', async () => {
+    const wsId = 'ws-aok-2'
+    const featId = 'feat-aok-2'
+    const runId = 'run-aok-2'
+    insertWorkspace(wsId, path.join(tmpRoot, wsId))
+    insertFeature(featId, wsId)
+    seedWorkflow(wsId)
+    insertStageRun(runId, featId, 'spec', 'cli-sess', 'spec')
+
+    await expect(
+      AgentService.approveStage(runId, { default: '   ' }, wsId, featId),
+    ).rejects.toThrow(/empty content/i)
+  })
+
+  it('合法 outputName + 非空 content → 落盘成功', async () => {
+    const wsId = 'ws-aok-3'
+    const featId = 'feat-aok-3'
+    const runId = 'run-aok-3'
+    insertWorkspace(wsId, path.join(tmpRoot, wsId))
+    insertFeature(featId, wsId)
+    seedWorkflow(wsId)
+    insertStageRun(runId, featId, 'spec', 'cli-sess', 'spec')
+
+    const result = await AgentService.approveStage(
+      runId, { default: '# valid' }, wsId, featId,
+    )
+    expect(result.outputNames).toEqual(['default'])
+  })
+
+  it('agent.outputs 为空但请求带了任意 key → 抛 400（agent 没声明任何 port）', async () => {
+    const wsId = 'ws-aok-4'
+    const featId = 'feat-aok-4'
+    const runId = 'run-aok-4'
+    insertWorkspace(wsId, path.join(tmpRoot, wsId))
+    insertFeature(featId, wsId)
+    seedWorkflow(wsId)
+    insertStageRun(runId, featId, 'spec', 'cli-sess', 'spec')
+
+    // override: agent.outputs = []
+    ;(globalThis as any).__mockAgentConfigs = { spec: { outputs: [] } }
+
+    await expect(
+      AgentService.approveStage(runId, { default: '# whatever' }, wsId, featId),
+    ).rejects.toThrow(/not declared/)
+  })
+})
+
+// Implements: .scratch/agent-contract-db/issues/04-runtime-contract.md
+// slice 04：sendMessage 喂给 runtime 的 resumeSystemPrompt 是 buildResumeSystemPrompt
+// 的返回值（snapshot 而非 live agent）。通过 mockRuntime.resumeSession 第 5 参断言。
+
+describe('slice 04: sendMessage 喂 snapshot-based prompt 给 runtime', () => {
+  it('sendMessage 把 buildResumeSystemPrompt 的返回值作为 resumeSession 第 5 参', async () => {
+    const wsId = 'ws-resume-1'
+    const featId = 'feat-resume-1'
+    const runId = 'run-resume-1'
+    const localPath = path.join(tmpRoot, wsId)
+    insertWorkspace(wsId, localPath)
+    insertFeature(featId, wsId)
+    insertStageRun(runId, featId, 'spec', 'cli-sess-resume', 'spec')
+
+    mockRuntime.resumeSession.mockImplementation(function* () {
+      yield { kind: 'text' as const, text: 'reply' }
+    })
+
+    const stream = await AgentService.sendMessage(runId, 'next msg')
+    for await (const _chunk of stream) { /* drain */ }
+
+    expect(mockRuntime.resumeSession).toHaveBeenCalledTimes(1)
+    // 第 5 参 = resumeSystemPrompt（mock buildResumeSystemPrompt 返 'mocked-resume-system-prompt'）
+    const fifthArg = mockRuntime.resumeSession.mock.calls[0][4]
+    expect(fifthArg).toBe('mocked-resume-system-prompt')
   })
 })

@@ -25,11 +25,17 @@ export class CodefreeAdapter implements RuntimeAdapter {
     message: string,
     cwd?: string,
     options?: SessionOptions,
+    // slice 04: codefree 无独立 system-prompt 标志，靠 stdin 注入。
+    // resume 时若调用方传了 snapshot-based prompt，把它拼到 message 前面送 stdin。
+    resumeSystemPrompt?: string,
   ): AsyncIterable<StreamChunk> {
     const cmd = this.command
     const args = ['--resume', sessionId, '--output-format', 'stream-json']
+    const payload = resumeSystemPrompt?.trim()
+      ? `${resumeSystemPrompt}\n\n${message}`
+      : message
     async function* s(): AsyncIterable<StreamChunk> {
-      for await (const e of spawnCliStream(cmd, args, message, cwd, undefined, options?.env, options?.timeoutMs)) {
+      for await (const e of spawnCliStream(cmd, args, payload, cwd, undefined, options?.env, options?.timeoutMs)) {
         if ('sessionId' in e) continue
         yield e
       }

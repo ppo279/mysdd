@@ -40,6 +40,7 @@ const agentsModule = await import('./agents.js')
 const {
   loadAgentsConfig,
   buildSystemPrompt,
+  buildResumeSystemPrompt,
   clearCache,
   getSedimentEnabledAgents,
   buildEdgeBasedContext,
@@ -407,5 +408,181 @@ describe('slice 03: AgentConfig.inputs / outputs 解析', () => {
     const spec = cfg.agents.find((a) => a.id === 'spec')
     expect(spec?.inputs).toEqual([])     // 解析失败 → fallback
     expect(spec?.outputs).toEqual([])    // 非字符串数组 → fallback
+  })
+})
+
+// ============== Slice 1a: AgentConfig.tools.reads / writes 解析 ==============
+// Implements: docs/prds/agent-side-output-via-mcp.md (Slice 1a)
+// Phase 1 仅字段解析与存取；运行时 ACL 不强制（未声明 tools 走老语义全读全写）。
+// cross-ref 校验（reads/writes 必须 ∈ global.artifact_types）留给 Slice 1b。
+
+const FIXTURE_WITH_TOOLS = {
+  runtimes: [{ id: 'claude', type: 'claude-cli', command: 'claude' }],
+  global: {
+    base_layers: [],
+    artifact_types: [
+      { id: 'bug_report' },
+      { id: 'bug_analysis' },
+      { id: 'reproduction_test' },
+    ],
+  },
+  agents: [
+    {
+      id: 'bug-analyst',
+      name: 'Bug Analyst',
+      runtime: 'claude',
+      instruction: 'Analyze the bug report and produce a structured bug_analysis.json.',
+      output_file: 'bug_analysis.json',
+      tools: { reads: ['bug_report'], writes: ['bug_analysis'] },
+    },
+    {
+      id: 'test-architect',
+      name: 'Test Architect',
+      runtime: 'claude',
+      instruction: 'Write reproduction tests from bug_analysis.json.',
+      output_file: 'reproduction.test.ts',
+      tools: { reads: ['bug_analysis'], writes: ['reproduction_test'] },
+    },
+  ],
+}
+
+describe('Slice 1a: AgentConfig.tools.reads / writes 解析', () => {
+  it('含 tools.reads / tools.writes → loadAgentsConfig 反序列化为 AgentToolsConfig', () => {
+    seed(FIXTURE_WITH_TOOLS)
+    const cfg = loadAgentsConfig()
+    const ba = cfg.agents.find((a) => a.id === 'bug-analyst')
+    expect(ba?.tools).toEqual({ reads: ['bug_report'], writes: ['bug_analysis'] })
+    const ta = cfg.agents.find((a) => a.id === 'test-architect')
+    expect(ta?.tools).toEqual({ reads: ['bug_analysis'], writes: ['reproduction_test'] })
+  })
+
+  it('不填 tools 字段 → loadAgentsConfig.tools 为 undefined（"未声明 = 老语义"对齐）', () => {
+    seed({
+      runtimes: [{ id: 'claude', type: 'claude-cli', command: 'claude' }],
+      global: { base_layers: [] },
+      agents: [{ id: 'spec', name: 'Spec', runtime: 'claude', instruction: 'Spec', output_file: 'spec.md' }],
+    })
+    const cfg = loadAgentsConfig()
+    const spec = cfg.agents.find((a) => a.id === 'spec')
+    expect(spec?.tools).toBeUndefined()
+  })
+
+  it('tools 仅填 reads（不填 writes）→ writes 归一化为 []', () => {
+    seed({
+      runtimes: [{ id: 'claude', type: 'claude-cli', command: 'claude' }],
+      global: { base_layers: [] },
+      agents: [{ id: 'spec', name: 'Spec', runtime: 'claude', instruction: 'Spec', output_file: 'spec.md', tools: { reads: ['bug_report'] } }],
+    })
+    const cfg = loadAgentsConfig()
+    const spec = cfg.agents.find((a) => a.id === 'spec')
+    expect(spec?.tools?.reads).toEqual(['bug_report'])
+    expect(spec?.tools?.writes).toEqual([])
+  })
+
+  it('DB 里 tools_reads_json 非字符串数组 → 归一化为 []（不抛错）', () => {
+    seed(FIXTURE_WITH_TOOLS)
+    sqlite.prepare(`UPDATE agents SET tools_reads_json = ?, tools_writes_json = ? WHERE id = ?`)
+      .run('not-json', '[1, 2, 3]', 'bug-analyst')
+    clearCache()
+    const cfg = loadAgentsConfig()
+    const ba = cfg.agents.find((a) => a.id === 'bug-analyst')
+    // reads 解析失败 + writes 非字符串数组 → 都归一化为 [] → tools 变 undefined
+    expect(ba?.tools).toBeUndefined()
+  })
+
+  it('tools.reads 含非字符串元素 → seeder fail-fast 抛错', () => {
+    expect(() => seedAgentsFixture({
+      runtimes: [{ id: 'claude', type: 'claude-cli', command: 'claude' }],
+      global: { base_layers: [] },
+      agents: [{ id: 'spec', name: 'Spec', runtime: 'claude', instruction: 'Spec', output_file: 'spec.md', tools: { reads: [123 as unknown as string] } }],
+    } as unknown as AgentsFixture)).toThrow(/tools\.reads/)
+  })
+})
+
+// ============== Slice 1a: GlobalConfig.artifact_types 解析 ==============
+
+describe('Slice 1a: GlobalConfig.artifact_types 解析', () => {
+  it('含 artifact_types → loadAgentsConfig 按 position 顺序返回 ArtifactTypeConfig[]', () => {
+    seed(FIXTURE_WITH_TOOLS)
+    const cfg = loadAgentsConfig()
+    expect(cfg.global.artifact_types).toEqual([
+      { id: 'bug_report', name: 'bug_report', schemaRef: undefined },
+      { id: 'bug_analysis', name: 'bug_analysis', schemaRef: undefined },
+      { id: 'reproduction_test', name: 'reproduction_test', schemaRef: undefined },
+    ])
+  })
+
+  it('带 schema_ref → ArtifactTypeConfig 字段保留相对路径', () => {
+    seed({
+      runtimes: [{ id: 'claude', type: 'claude-cli', command: 'claude' }],
+      global: {
+        base_layers: [],
+        artifact_types: [
+          { id: 'bug_analysis', name: 'Bug Analysis', schema_ref: './schemas/bug_analysis.schema.ts' },
+        ],
+      },
+      agents: [{ id: 'spec', name: 'Spec', runtime: 'claude', instruction: 'Spec', output_file: 'spec.md' }],
+    })
+    const cfg = loadAgentsConfig()
+    expect(cfg.global.artifact_types?.[0]).toEqual({
+      id: 'bug_analysis',
+      name: 'Bug Analysis',
+      schemaRef: './schemas/bug_analysis.schema.ts',
+    })
+  })
+
+  it('不填 artifact_types → 字段为 []（与旧 DB 兼容）', () => {
+    seed({
+      runtimes: [{ id: 'claude', type: 'claude-cli', command: 'claude' }],
+      global: { base_layers: [] },
+      agents: [{ id: 'spec', name: 'Spec', runtime: 'claude', instruction: 'Spec', output_file: 'spec.md' }],
+    })
+    const cfg = loadAgentsConfig()
+    expect(cfg.global.artifact_types).toEqual([])
+  })
+})
+
+// ============== slice 04: buildResumeSystemPrompt 从 snapshot 拼 ==============
+// (.scratch/agent-contract-db/issues/04-runtime-contract.md)
+// 验证 resume 路径用 stage_runs.instruction_snapshot 而非 live agent.instruction。
+
+describe('slice 04: buildResumeSystemPrompt 用 snapshot 拼 system prompt', () => {
+  it('snapshot 已存 → 用 snapshot 内容，不用 live agent.instruction', () => {
+    seed({
+      runtimes: [{ id: 'claude', type: 'claude-cli', command: 'claude' }],
+      global: { base_layers: [{ name: 'layer1', content: 'Base layer 1' }] },
+      agents: [{ id: 'spec', name: 'Spec', runtime: 'claude', instruction: 'LIVE INSTRUCTION', output_file: 'spec.md' }],
+    })
+    // 模拟 startStage 写入 snapshot
+    const stageRunId = 'run-snap-1'
+    sqlite.prepare(`
+      INSERT INTO workspaces (id, name, created_at)
+      VALUES (?, ?, ?)
+    `).run('ws-snap-1', 'ws-snap-1', Date.now())
+    sqlite.prepare(`
+      INSERT INTO features (id, workspace_id, name, created_at)
+      VALUES (?, ?, ?, ?)
+    `).run('feat-snap-1', 'ws-snap-1', 'feat-snap-1', Date.now())
+    sqlite.prepare(`
+      INSERT INTO stage_runs (id, feature_id, stage, instruction_snapshot, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(stageRunId, 'feat-snap-1', 'spec', 'SNAPSHOT INSTRUCTION', Date.now())
+
+    const prompt = buildResumeSystemPrompt(stageRunId, 'background')
+    expect(prompt).toContain('SNAPSHOT INSTRUCTION')
+    expect(prompt).not.toContain('LIVE INSTRUCTION')
+    // 其它层仍正常拼
+    expect(prompt).toContain('Base layer 1')
+    expect(prompt).toContain('## Workspace 背景信息')
+    expect(prompt).toContain('background')
+  })
+
+  it('stage_run 不存在 → 抛 STAGERUN_NOT_FOUND', () => {
+    seed({
+      runtimes: [{ id: 'claude', type: 'claude-cli', command: 'claude' }],
+      global: { base_layers: [] },
+      agents: [{ id: 'spec', name: 'Spec', runtime: 'claude', instruction: 'I', output_file: 'spec.md' }],
+    })
+    expect(() => buildResumeSystemPrompt('does-not-exist', '')).toThrow(/not found/i)
   })
 })

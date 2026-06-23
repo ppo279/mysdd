@@ -64,5 +64,13 @@ export interface RuntimeAdapter {
     message: string,
     cwd?: string,
     options?: SessionOptions,
+    /**
+     * Implements: .scratch/agent-contract-db/issues/04-runtime-contract.md
+     * slice 04：可选的 snapshot-based system prompt，从 stage_runs.instruction_snapshot 拼出。
+     * claude 的 --resume 自身保留原 session 的 system prompt，本参数被忽略；
+     * codefree 无独立 system 标志位，把 snapshot prompt 与 user message 一起送 stdin。
+     * 缺省（undefined）保持向后兼容——老调用方不需要改。
+     */
+    resumeSystemPrompt?: string,
   ): AsyncIterable<StreamChunk>
 }

@@ -19,6 +19,7 @@ import { getRuntime } from '../runtime/registry.js'
 import { isReservedNodeId } from './workflow.js'
 import {
   buildSystemPrompt,
+  buildResumeSystemPrompt,
   buildEdgeBasedContext,
   getAgentConfig,
   type FeatureContext,
@@ -403,11 +404,19 @@ export class AgentService {
       localPath,
     )
     const effectiveRuntime = getRuntime(effectiveRuntimeId)
+    // Implements: .scratch/agent-contract-db/issues/04-runtime-contract.md
+    // slice 04：resume 时 system prompt 来自 stage_runs.instruction_snapshot，
+    // 不再读 live agent 行——确保 in-flight 阶段改 agent.instruction 不影响
+    // 当前 resume 行为。Claude 的 --resume 自身保留原 session 的 prompt，
+    // 这里仍算出 snapshot prompt 喂给 codefree（它无独立 system 标志，靠 stdin 注入）。
+    const [wsRow] = await db.select().from(workspaces).where(eq(workspaces.id, feature.workspaceId))
+    const resumeSystemPrompt = buildResumeSystemPrompt(stageRunId, wsRow?.background ?? '')
     const stream = effectiveRuntime.resumeSession(
       run.cliSessionId,
       userMessage,
       sessionOptions.cwd,
       { ...sessionOptions, signal },
+      resumeSystemPrompt,
     )
 
     const now = new Date()

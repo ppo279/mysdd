@@ -435,6 +435,10 @@ export class ClaudeAdapter implements RuntimeAdapter {
     message: string,
     cwd?: string,
     options?: import('./adapter.js').SessionOptions,
+    // slice 04: claude's --resume keeps the original session's system prompt,
+    // so we ignore resumeSystemPrompt here. See runtime/codefree.ts for the
+    // adapter that actually consumes it.
+    _resumeSystemPrompt?: string,
   ): AsyncIterable<StreamChunk> {
     const cmd = this.command
     const args = [

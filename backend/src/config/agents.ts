@@ -8,9 +8,9 @@
 // - 启动期：index.ts 先 initDb()；loadAgentsConfig 永远读到的是 DB 里的最新数据
 //   （agents 表为空也是合法状态——ConfigView PUT 或手工 INSERT 填入）。
 
-import { asc } from 'drizzle-orm'
+import { asc, eq } from 'drizzle-orm'
 import { db } from '../db/index.js'
-import { runtimes, baseLayers, agents } from '../db/schema.js'
+import { runtimes, baseLayers, artifactTypes, agents, stageRuns } from '../db/schema.js'
 import { BizError, Code } from '../lib/envelope.js'
 
 // Implements: docs/adr/0001-workflow-execution-model.md
@@ -55,6 +55,18 @@ export interface AgentConfig {
   memory_sediment?: boolean
   // Phase 2: per-agent runtime config（DB 级默认；workflow_nodes.config_json 覆盖之）
   config?: AgentRuntimeConfig
+  // Implements: docs/prds/agent-side-output-via-mcp.md (Slice 1a)
+  // Phase 1 仅字段解析；ACL 运行时强制留给 Phase 2（per-agent reads/writes filter）。
+  // 字段未声明时返回 undefined，等价于"全 reads + 全 writes"老语义。
+  tools?: AgentToolsConfig
+}
+
+// Implements: docs/prds/agent-side-output-via-mcp.md (Slice 1a)
+// reads / writes 各自是 artifact type id 的字符串数组。
+// undefined 元素被 loadAgentsConfig 在解析层静默归一化为 []。
+export interface AgentToolsConfig {
+  reads: string[]
+  writes: string[]
 }
 
 export interface RuntimeConfig {
@@ -68,8 +80,18 @@ export interface BaseLayer {
   content: string
 }
 
+// Implements: docs/prds/agent-side-output-via-mcp.md (Slice 1a)
+// 全局 artifact 类型声明；id 在 yaml 内唯一。schema_ref 是相对 agents.yaml 的
+// 可选路径，Phase 1 不在启动期 import（懒加载于 MCP server write_artifact 时）。
+export interface ArtifactTypeConfig {
+  id: string
+  name: string
+  schemaRef?: string
+}
+
 export interface GlobalConfig {
   base_layers: BaseLayer[]
+  artifact_types?: ArtifactTypeConfig[]
 }
 
 export interface AgentsYaml {
@@ -102,6 +124,7 @@ export function clearCache() {
  * 把 DB 当前内容序列化为 yaml 形状的 AgentsYaml。
  * - runtimes 按 id 升序（确定性顺序，PUT 写回后形状不变）
  * - base_layers 按 position 升序（保持拼接顺序）
+ * - artifact_types 按 position 升序（Slice 1a）
  * - agents 按 id 升序
  *
  * 字段缺失/JSON 解析失败时静默归一化为空值（db 已是 source of truth，不应抛错）。
@@ -111,12 +134,19 @@ export function loadAgentsConfig(): AgentsYaml {
 
   const rts = db.select().from(runtimes).orderBy(asc(runtimes.id)).all()
   const bls = db.select().from(baseLayers).orderBy(asc(baseLayers.position)).all()
+  const ats = db.select().from(artifactTypes).orderBy(asc(artifactTypes.position)).all()
   const ags = db.select().from(agents).orderBy(asc(agents.id)).all()
 
   _config = {
     runtimes: rts.map((r) => ({ id: r.id, type: r.type, command: r.command || undefined })),
     global: {
       base_layers: bls.map((b) => ({ name: b.name, content: b.content })),
+      // Implements: docs/prds/agent-side-output-via-mcp.md (Slice 1a)
+      artifact_types: ats.map((t) => ({
+        id: t.id,
+        name: t.name,
+        schemaRef: t.schemaRef ?? undefined,
+      })),
     },
     agents: ags.map((a) => {
       let cfg: AgentRuntimeConfig | undefined
@@ -132,6 +162,12 @@ export function loadAgentsConfig(): AgentsYaml {
       // 归一化为 []——"缺省 = agent 没声明任何 port" 的语义。
       const inputs = parseStringArray(a.inputsJson) ?? []
       const outputs = parseStringArray(a.outputsJson) ?? []
+      // Slice 1a: tools.reads/writes 同模式归一化；reads/writes 都为 []
+      // 时整个 tools 字段返回 undefined——保留"未声明 = 老语义"的对齐。
+      const reads = parseStringArray(a.toolsReadsJson) ?? []
+      const writes = parseStringArray(a.toolsWritesJson) ?? []
+      const tools: AgentToolsConfig | undefined =
+        (reads.length > 0 || writes.length > 0) ? { reads, writes } : undefined
       return {
         id: a.id,
         name: a.name,
@@ -144,6 +180,7 @@ export function loadAgentsConfig(): AgentsYaml {
         outputs,
         memory_sediment: a.memorySediment === 1,
         config: cfg,
+        tools,
       }
     }),
   }
@@ -218,6 +255,56 @@ export function buildSystemPrompt(
   if (agent.outputs.length > 0) {
     const files = agent.outputs.map((o) => `- \`${o}\``).join('\n')
     parts.push(`## 产出契约\n\n本阶段结束后，你必须产出以下文件（每个落到 \`storage/<workspaceId>/<featureId>/<nodeId>/<filename>\`）：\n\n${files}`)
+  }
+
+  return parts.join('\n\n---\n\n')
+}
+
+/**
+ * Implements: .scratch/agent-contract-db/issues/04-runtime-contract.md
+ * slice 04：resume 路径必须从 stage_runs.instruction_snapshot 拼 system prompt，
+ * 不再读 live agent.instruction——避免"边跑边改 instruction"导致 in-flight 行为漂移。
+ *
+ * 与 buildSystemPrompt(agentId, ...) 的差别：
+ *   - agent.instruction 用 stage_runs.instruction_snapshot（无 snapshot 时回退到 live agent）
+ *   - 其它层（base_layers、background、产出契约）从 current agent config 读
+ *
+ * 调用方：services/agent.ts:sendMessage。CLI 的 `--resume` 自身不会重发 system prompt，
+ * 但调用方把 prompt 喂给 runtime 仍是有意义的——codefree 无 --system-prompt 标志，
+ * 靠 stdin 注入；resume 阶段仍可能需要重新注入 prompt。
+ */
+export function buildResumeSystemPrompt(stageRunId: string, workspaceBackground: string): string {
+  const runs = db.select().from(stageRuns).where(eq(stageRuns.id, stageRunId)).all()
+  const run = runs[0]
+  if (!run) {
+    throw new BizError(Code.STAGERUN_NOT_FOUND, `StageRun ${stageRunId} not found`, 404)
+  }
+  const agentId = run.stage
+  const agentRows = db.select().from(agents).where(eq(agents.id, agentId)).all()
+  const agent = agentRows[0]
+  if (!agent) {
+    throw new BizError(Code.INTERNAL, `Agent "${agentId}" not found while resuming stageRun`, 500)
+  }
+
+  const snapshotInstruction = run.instructionSnapshot ?? agent.instruction
+  const outputs = parseStringArray(agent.outputsJson) ?? []
+
+  // 走与 buildSystemPrompt 一致的拼接路径，但 instruction 字段用 snapshot。
+  const { global: globalCfg } = loadAgentsConfig()
+
+  const parts: string[] = []
+  for (const layer of globalCfg.base_layers) {
+    if (layer.content?.trim()) parts.push(layer.content)
+  }
+  if (snapshotInstruction.trim()) {
+    parts.push(snapshotInstruction)
+  }
+  if (workspaceBackground.trim()) {
+    parts.push(`## Workspace 背景信息\n\n${workspaceBackground}`)
+  }
+  if (outputs.length > 0) {
+    const files = outputs.map((o) => `- \`${o}\``).join('\n')
+    parts.push(`## 产出契约\n\n本阶段结束后，你必须产出以下文件：\n\n${files}`)
   }
 
   return parts.join('\n\n---\n\n')
