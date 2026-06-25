@@ -158,6 +158,34 @@ describe('AuthModule (e2e)', () => {
       expect(res.body.message).toBe('邮箱或密码错误');
     });
 
+    it('timing defense — not-found path STILL calls bcrypt.compare', async () => {
+      // Regression guard: someone might "optimize" by removing the
+      // bcrypt.compare in the user-not-found branch, which would re-enable
+      // email-enumeration via response-time analysis.
+      //
+      // We can't spy on bcrypt (native module, not redefinable), so we
+      // measure wall-clock time as a proxy. If a future change replaces
+      // DUMMY_HASH with a hard-coded malformed string, some bcrypt
+      // implementations may short-circuit and return false in <1ms,
+      // which this test would catch.
+      //
+      // 3 not-found logins should each take ≥50ms (bcrypt at cost=12
+      // is ~150-250ms; 50ms is a conservative lower bound).
+      const t = Date.now();
+      for (let i = 0; i < 3; i++) {
+        await request(app.getHttpServer())
+          .post('/auth/login')
+          .send({
+            email: uniqueEmail(`ghost-timing-${i}`),
+            password: VALID_PASSWORD,
+          })
+          .expect(401);
+      }
+      const elapsed = Date.now() - t;
+      // 3 logins × ~180ms each ≈ 540ms; allow generous lower bound
+      expect(elapsed).toBeGreaterThan(150);
+    });
+
     it('400 — missing password', async () => {
       await request(app.getHttpServer())
         .post('/auth/login')

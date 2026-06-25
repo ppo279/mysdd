@@ -14,8 +14,18 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
       useFactory: (config: ConfigService) => ({
         secret: config.getOrThrow<string>('JWT_SECRET'),
         signOptions: {
-          // jwt-typings expects StringValue (e.g. "7d") or number (seconds).
-          expiresIn: config.get<string>('JWT_EXPIRES_IN', '7d') as
+          // jwt-typings expects StringValue (e.g. "15m") or number (seconds).
+          //
+          // KNOWN GAP (tracked for Day 5 — refresh token + Redis blacklist):
+          // 15m is intentionally tight. A stolen access token is now usable
+          // for at most one class period instead of a full week, BUT we
+          // still have NO way to revoke a token before its natural expiry
+          // (no jti, no blacklist, no rotation). Day 5 closes that gap with
+          // refresh tokens (issued at /auth/login alongside accessToken)
+          // and a Redis denylist for compromised access tokens.
+          //
+          // Until then: assume any leaked access token is good for 15m.
+          expiresIn: config.get<string>('JWT_EXPIRES_IN', '15m') as
             | `${number}${'s' | 'm' | 'h' | 'd'}`
             | number
             | undefined,

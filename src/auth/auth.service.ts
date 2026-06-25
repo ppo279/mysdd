@@ -2,6 +2,7 @@ import {
   ConflictException,
   Injectable,
   InternalServerErrorException,
+  Logger,
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -13,8 +14,33 @@ import type { JwtPayload } from './guards/jwt-auth.guard';
 
 const BCRYPT_ROUNDS = 12;
 
+/**
+ * Pre-computed bcrypt hash used purely for **timing equalization** when a
+ * login attempt targets a non-existent email. We compare against THIS hash
+ * (not against a hand-typed placeholder like "$2b$12$......") because:
+ *
+ * 1. It's a structurally valid bcrypt hash (53-char body + 7-char prefix),
+ *    so it works across bcrypt implementations (native `bcrypt`, `bcryptjs`,
+ *    future versions) instead of relying on the implementation tolerating
+ *    malformed input.
+ * 2. It was hashed at BCRYPT_ROUNDS = 12, exactly matching real hashes —
+ *    no risk of an "optimization" path short-circuiting on length.
+ * 3. Computing it once at module-load time (~250ms, one-time startup cost)
+ *    is cheaper than computing it on every not-found login.
+ *
+ * Interview one-liner:
+ *   "I didn't hard-code a placeholder hash; I pre-generated a real one at
+ *    the same cost factor, so timing equalization doesn't depend on any
+ *    particular bcrypt implementation being lenient about malformed input."
+ */
+const DUMMY_HASH = bcrypt.hashSync('not-a-real-password', BCRYPT_ROUNDS);
+
 @Injectable()
 export class AuthService {
+  // Class-scoped Logger — log lines get the `[AuthService]` prefix for free,
+  // which is what makes grep across services in production actually usable.
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
@@ -54,7 +80,20 @@ export class AuthService {
           `邮箱 ${dto.email} 已被注册，请直接登录或换一个`,
         );
       }
-      // Anything else is a real server error
+      // Anything else is a real server error.
+      //
+      // Log the ORIGINAL error before throwing — otherwise the catch
+      // swallows the root cause and on-call only sees the generic 500
+      // text. Stack + Prisma code are the actual debugging signal.
+      //
+      // Context intentionally EXCLUDES dto.email: it's PII (ends up in
+      // log storage forever) and it's not the cause — the cause lives in
+      // the Prisma layer. The Chinese user-facing message keeps the
+      // email; the log line does not.
+      this.logger.error(
+        'Unexpected error during user registration',
+        err instanceof Error ? err.stack : String(err),
+      );
       throw new InternalServerErrorException('注册失败，请稍后再试');
     }
   }
@@ -76,9 +115,10 @@ export class AuthService {
     const invalid = new UnauthorizedException('邮箱或密码错误');
 
     if (!user) {
-      // Still run a bcrypt compare to keep response time roughly constant.
-      // (Without this, an attacker can tell which emails exist by timing.)
-      await bcrypt.compare(dto.password, '$2b$12$............................................................');
+      // Run a real bcrypt.compare against DUMMY_HASH so the not-found path
+      // takes the same time as the wrong-password path. See DUMMY_HASH
+      // comment above for the why.
+      await bcrypt.compare(dto.password, DUMMY_HASH);
       throw invalid;
     }
 
