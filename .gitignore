@@ -1,0 +1,74 @@
+# ============================================================
+# NestJS + pnpm + Prisma 7 + Docker — project .gitignore
+# ============================================================
+
+# === compiled output ===
+/dist
+/node_modules
+/build
+# TypeScript incremental build cache
+*.tsbuildinfo
+
+# === Prisma generated client (regenerated from schema) ===
+# The new prisma-client-js generator writes to node_modules/.prisma/client,
+# but if you ever switch to the prisma-client generator with `output = "..."`,
+# this rule covers it.
+generated/
+
+# === logs ===
+logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# === OS junk ===
+.DS_Store
+Thumbs.db
+
+# === tests / coverage ===
+# NOTE: `test/` itself is NOT ignored — e2e specs are part of the repo.
+/coverage
+/.nyc_output
+
+# === IDEs and editors ===
+/.idea
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+
+# VSCode: ignore folder contents but keep recommended files
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# === secrets ===
+# Ignore every .env variant EXCEPT the committed template.
+.env
+.env.*
+!.env.example
+.env.development.local
+.env.test.local
+.env.production.local
+
+# === temp / runtime ===
+.temp
+.tmp
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# === Node diagnostic reports ===
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+# === local Claude Code state (don't share with team) ===
+/.claude
+/.codefree

@@ -1,0 +1,75 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+
+enum EnumStatus {
+  pending
+  ocr_processing
+  ocr_done
+  solving
+  done
+  failed
+}
+
+// 家长端用户
+model User {
+  id    Int     @id @default(autoincrement())
+  email String  @unique
+  passwordHash String
+  createTime DateTime @default(now())
+  updatedAt DateTime?  @updatedAt
+  // 反向关系：一个用户可以有多个孩子
+  children Child[]
+  
+}
+// 孩子
+model Child {
+  id    Int     @id @default(autoincrement())
+  name String
+  grade Int
+  createTime DateTime @default(now())
+  // 关系 
+  // 属于一个User
+  userId Int 
+  user User @relation(fields: [userId], references: [id])
+  // 反向关系：一个孩子可以有多个题目
+  problems Problem[]
+}
+// 题目
+model Problem {
+  id    Int     @id @default(autoincrement())
+  imageUrl String
+  ocrText String?
+  status EnumStatus @default(pending)
+  createTime DateTime @default(now())
+  updatedAt DateTime?  @updatedAt
+  // 一对多（Problem 必须属于一个 Chile）
+  childId Int
+  child   Child @relation(fields: [childId], references: [id])
+  // 有多个 Solution
+  solutions Solution[]
+}
+// 解题思路
+model Solution {
+  id    Int     @id @default(autoincrement())
+  content String
+  createTime DateTime @default(now())
+  // 用了哪个大模型
+  model String?
+  // token
+  token Int?
+  // 属于一个Problem 
+  problemId Int
+  // 反向关系
+  problem  Problem @relation(fields: [problemId], references: [id])
+} 
