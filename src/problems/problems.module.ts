@@ -1,25 +1,32 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
+import { AnthropicModule } from '../integrations/anthropic/anthropic.module';
 import { StorageModule } from '../storage/storage.module';
 import { ProblemsController } from './problems.controller';
+import { StreamIdorGuard } from './guards/stream-idor.guard';
+import { ProblemSolverService } from './problem-solver.service';
 import { ProblemsService } from './problems.service';
 
 /**
- * ProblemsModule — Phase 1 vertical slice (issues/001).
+ * ProblemsModule — vertical slices 1 + 2.
  *
- * Covers upload, read-state, and read-image. Streaming + solve lives in
- * the follow-up issue (`docs/issues/002-problems-solve-stream.md`).
+ *  - Slice 1 (issues/001): upload + read state + read image.
+ *  - Slice 2 (issues/002): solve + SSE stream.
  *
  * Module composition:
- * - `AuthModule`: gives us `JwtAuthGuard` (already global-ish; imported
- *   here so this module is self-contained when imported standalone).
- * - `StorageModule`: provides `STORAGE_SERVICE`. NOT `@Global()` —
- *   see `src/storage/storage.module.ts` for the rationale.
+ * - `AuthModule`: gives us `JwtAuthGuard`. Not strictly required as a
+ *   direct import (the guard could be re-declared) but keeping it
+ *   explicit makes this module self-contained when used standalone.
+ * - `StorageModule`: provides `STORAGE_SERVICE` for the image
+ *   lifecycle (put on upload, read on stream/image, delete on
+ *   rollback). NOT `@Global()` — see Phase 2 backlog.
+ * - `AnthropicModule`: provides `ANTHROPIC_CLIENT` for the SSE
+ *   solver. NOT `@Global()` — see Phase 2 backlog.
  * - `PrismaModule` is global, so we don't re-import it.
  */
 @Module({
-  imports: [AuthModule, StorageModule],
+  imports: [AuthModule, StorageModule, AnthropicModule],
   controllers: [ProblemsController],
-  providers: [ProblemsService],
+  providers: [ProblemsService, ProblemSolverService, StreamIdorGuard],
 })
 export class ProblemsModule {}

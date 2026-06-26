@@ -192,6 +192,39 @@ export class ProblemsService {
   }
 
   /**
+   * Lightweight IDOR check used by the SSE stream endpoint. Confirms
+   * the problem exists AND belongs to the calling user. Returns the
+   * status so the controller can decide whether to even open a stream
+   * (e.g. a `done` row that was already solved can short-circuit to
+   * the cached solution). Throws `404 problem 不存在` on miss — same
+   * shape as every other endpoint, no enumeration via probing ids.
+   *
+   * Why a separate method instead of reusing `getOne`? `getOne` does
+   * a heavier query (loads the latest solution) and we don't need
+   * any of that data on the stream path. The check has to be cheap
+   * because every stream open pays for it.
+   */
+  async assertOwnedByUser(
+    userId: number,
+    problemId: number,
+  ): Promise<{
+    id: number;
+    status: 'pending' | 'solving' | 'done' | 'failed';
+  }> {
+    const problem = await this.prisma.problem.findFirst({
+      where: { id: problemId, child: { userId } },
+      select: { id: true, status: true },
+    });
+    if (!problem) {
+      throw new NotFoundException('problem 不存在');
+    }
+    return {
+      id: problem.id,
+      status: problem.status as 'pending' | 'solving' | 'done' | 'failed',
+    };
+  }
+
+  /**
    * Stream the stored image bytes. Returns the Readable plus the MIME
    * that was sniffed at upload time.
    *

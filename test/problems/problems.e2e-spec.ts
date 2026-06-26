@@ -6,23 +6,29 @@ import request from 'supertest';
 import { AppModule } from '../../src/app.module';
 import { AllExceptionsFilter } from '../../src/common/filters/all-exceptions.filter';
 import { buildValidationPipe } from '../../src/common/validation';
+import { ANTHROPIC_CLIENT } from '../../src/integrations/anthropic/anthropic.tokens';
 import { PrismaService } from '../../src/prisma/prisma.service';
 import { LocalDiskStorageService } from '../../src/storage/local-disk-storage.service';
+import { FakeAnthropicClient } from './fakes/fake-anthropic-client';
+import { consumeSse } from './helpers/consume-sse';
 import { createChild } from './fixtures/child';
 import { cleanupUser, registerAndLogin } from './fixtures/user';
 
 /**
- * E2E tests for ProblemsModule — issue 001 vertical slice.
+ * E2E tests for ProblemsModule — issues 001 + 002 vertical slices.
  *
- * Covers cases #1, #2, #3, #4, #5, #6, #7, #9, #12 from the PRD
- * (`docs/prd/problems.md` §"Cases"). Streaming + solve (#10, #11) are
- * out of scope for this slice and live in issue 002.
+ * Covers cases #1, #2, #3, #4, #5, #6, #7, #9, #10, #11, #12 from the
+ * PRD (`docs/prd/problems.md` §"Cases"). Slice 1 (issue 001) added
+ * upload/read/read-image; slice 2 (issue 002) added the SSE solver.
  *
  * Strategy:
  * - Real Postgres (the dev container). Unique emails + unique child IDs
  *   per test keep cases independent — no TRUNCATE between runs.
  * - Storage is the real LocalDiskStorageService. `afterEach` removes the
  *   per-user upload directory so cases don't bleed into each other.
+ * - Anthropic is a `FakeAnthropicClient` (overridden via the
+ *   `ANTHROPIC_CLIENT` provider token). This sidesteps needing a real
+ *   `ANTHROPIC_API_KEY` in `.env` and gives us deterministic events.
  */
 
 const TINY_PNG = resolve(__dirname, 'fixtures', 'tiny.png');
@@ -30,19 +36,38 @@ const TINY_PNG = resolve(__dirname, 'fixtures', 'tiny.png');
 describe('ProblemsModule (e2e)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
+  let fakeAi: FakeAnthropicClient;
 
   beforeAll(async () => {
+    fakeAi = new FakeAnthropicClient();
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
-    }).compile();
+    })
+      .overrideProvider(ANTHROPIC_CLIENT)
+      .useValue(fakeAi)
+      .compile();
 
     app = moduleFixture.createNestApplication();
     app.useGlobalPipes(buildValidationPipe());
     app.useGlobalFilters(new AllExceptionsFilter());
     await app.init();
+    // Bind to a random port so the SSE tests can hit a real socket
+    // via Node 24's `fetch`. supertest also works against a real
+    // listening server, so this doesn't break the supertest path.
+    await app.listen(0);
 
     prisma = app.get(PrismaService);
   });
+
+  /**
+   * Return the base URL the test app is listening on. Used by the
+   * SSE test cases — supertest can't parse SSE, so they make real
+   * `fetch` calls against the bound port.
+   */
+  function baseUrl(): string {
+    const port = (app.getHttpServer().address() as { port: number }).port;
+    return `http://127.0.0.1:${port}`;
+  }
 
   afterAll(async () => {
     await app.close();
@@ -441,6 +466,234 @@ describe('ProblemsModule (e2e)', () => {
       await expect(
         service.delete('problems/999999/never-existed.png'),
       ).resolves.toBeUndefined();
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────
+  // GET /problems/:id/stream — case #10 (auth + IDOR)
+  // Issue 002 vertical slice.
+  // ─────────────────────────────────────────────────────────────
+  describe('GET /problems/:id/stream', () => {
+    beforeEach(() => {
+      // Reset per-test fake state so streamCallCount / lastBody don't
+      // bleed across cases. The default events are the success path;
+      // individual tests call `setEvents` to script errors.
+      fakeAi.streamCallCount = 0;
+      fakeAi.lastBody = null;
+      fakeAi.setEvents([
+        { kind: 'thinking', text: 'Let me analyze the problem step by step.' },
+        { kind: 'text', text: 'The answer is 42.' },
+        { kind: 'end' },
+      ]);
+    });
+
+    // ─────────────────────────────────────────────────────────
+    // case #10a — 401 when no token
+    // ─────────────────────────────────────────────────────────
+    it('case #10a — 401 when no Authorization header', async () => {
+      await request(app.getHttpServer()).get('/problems/1/stream').expect(401);
+    });
+
+    // ─────────────────────────────────────────────────────────
+    // case #10b — 404 problem 不存在 for IDOR miss
+    // ─────────────────────────────────────────────────────────
+    it("case #10b — 404 problem 不存在 for someone else's problem (IDOR-safe)", async () => {
+      const owner = await registerAndLogin(app, 'p-stream-owner');
+      const attacker = await registerAndLogin(app, 'p-stream-attacker');
+      try {
+        const child = await createChild(prisma, { userId: owner.user.id });
+        const createRes = await request(app.getHttpServer())
+          .post('/problems')
+          .set('Authorization', `Bearer ${owner.accessToken}`)
+          .field('childId', String(child.id))
+          .attach('image', TINY_PNG)
+          .expect(201);
+        const problemId = createRes.body.data.id as number;
+
+        // Use Node 24 fetch — supertest can't parse SSE properly.
+        const url = `${baseUrl()}/problems/${problemId}/stream`;
+        const res = await fetch(url, {
+          headers: { Authorization: `Bearer ${attacker.accessToken}` },
+        });
+        expect(res.status).toBe(404);
+        const body = (await res.json()) as { code: number; message: string };
+        expect(body.message).toBe('problem 不存在');
+        // Crucially: no SSE bytes leaked (the response was a JSON
+        // error envelope, not a 200 text/event-stream). The
+        // Content-Type confirms it.
+        expect(res.headers.get('content-type')).toMatch(/application\/json/);
+      } finally {
+        await cleanupTestUser(attacker.user.id);
+        await cleanupTestUser(owner.user.id);
+      }
+    });
+
+    // ─────────────────────────────────────────────────────────
+    // case #11a — full happy-path stream
+    // Asserts event order, payload shape, DB status=done, solution
+    // row contents.
+    // ─────────────────────────────────────────────────────────
+    it('case #11a — happy path: streams status → reasoning_delta → content_delta → done; DB reaches done with a solution', async () => {
+      const { user, accessToken } = await registerAndLogin(app, 'p-solve-happy');
+      try {
+        const child = await createChild(prisma, { userId: user.id });
+        const createRes = await request(app.getHttpServer())
+          .post('/problems')
+          .set('Authorization', `Bearer ${accessToken}`)
+          .field('childId', String(child.id))
+          .attach('image', TINY_PNG)
+          .expect(201);
+        const problemId = createRes.body.data.id as number;
+
+        // Stream the SSE response. `consumeSse` uses Node 24 fetch.
+        const url = `${baseUrl()}/problems/${problemId}/stream`;
+        const events: Array<{ event: string | null; data: unknown }> = [];
+        for await (const frame of consumeSse(url, accessToken)) {
+          events.push(frame);
+        }
+
+        // Locked event sequence: status(solving) → reasoning_delta →
+        // content_delta → done. (Heuristic: there might be additional
+        // `ping` heartbeat events if the solve is slow, but the fake
+        // resolves in a few microseconds so no ping is expected here.)
+        const types = events.map((e) => e.event);
+        expect(types).toContain('done');
+        // First non-ping event must be a status frame.
+        const firstReal = events.find((e) => e.event !== 'ping');
+        expect(firstReal?.event).toBe('status');
+        expect(firstReal?.data).toEqual({ status: 'solving' });
+        // Last event must be `done` (or `error` for failure paths).
+        expect(types[types.length - 1]).toBe('done');
+        // The done payload shape is locked.
+        const doneFrame = events.find((e) => e.event === 'done');
+        expect(doneFrame?.data).toMatchObject({
+          problemId,
+          totalTokens: 42,
+        });
+        expect((doneFrame?.data as { solutionId: number }).solutionId).toEqual(
+          expect.any(Number),
+        );
+
+        // Fake called exactly once.
+        expect(fakeAi.streamCallCount).toBe(1);
+        // Model + thinking config in the request body — proves the
+        // production solver code path is wired.
+        expect(fakeAi.lastBody?.model).toBe('MiniMax-M3');
+        const thinking = (fakeAi.lastBody as { thinking?: { type: string } } | null)
+          ?.thinking;
+        expect(thinking).toEqual({ type: 'adaptive' });
+
+        // DB state: status=done, exactly one Solution row.
+        const row = await prisma.problem.findUnique({
+          where: { id: problemId },
+          include: { solutions: true },
+        });
+        expect(row?.status).toBe('done');
+        expect(row?.solutions).toHaveLength(1);
+        expect(row?.solutions[0]?.content).toBe('The answer is 42.');
+        expect(row?.solutions[0]?.model).toBe('MiniMax-M3');
+        expect(row?.solutions[0]?.token).toBe(42);
+      } finally {
+        await cleanupTestUser(user.id);
+      }
+    });
+
+    // ─────────────────────────────────────────────────────────
+    // case #11b — solver failure: error event + status=failed
+    // ─────────────────────────────────────────────────────────
+    it('case #11b — solver error → error event + DB status=failed', async () => {
+      fakeAi.setEvents([{ kind: 'error', message: 'upstream blew up' }]);
+
+      const { user, accessToken } = await registerAndLogin(app, 'p-solve-fail');
+      try {
+        const child = await createChild(prisma, { userId: user.id });
+        const createRes = await request(app.getHttpServer())
+          .post('/problems')
+          .set('Authorization', `Bearer ${accessToken}`)
+          .field('childId', String(child.id))
+          .attach('image', TINY_PNG)
+          .expect(201);
+        const problemId = createRes.body.data.id as number;
+
+        const url = `${baseUrl()}/problems/${problemId}/stream`;
+        const events: Array<{ event: string | null; data: unknown }> = [];
+        for await (const frame of consumeSse(url, accessToken)) {
+          events.push(frame);
+        }
+
+        const types = events.map((e) => e.event);
+        // The failure path emits `status: failed` then `error` then closes.
+        expect(types).toContain('error');
+        const errorFrame = events.find((e) => e.event === 'error');
+        expect(errorFrame?.data).toEqual({ message: '解题失败，请稍后重试' });
+
+        // DB: row marked failed, no Solution created.
+        const row = await prisma.problem.findUnique({
+          where: { id: problemId },
+          include: { solutions: true },
+        });
+        expect(row?.status).toBe('failed');
+        expect(row?.solutions).toHaveLength(0);
+      } finally {
+        await cleanupTestUser(user.id);
+      }
+    });
+
+    // ─────────────────────────────────────────────────────────
+    // case #11c — concurrency: second open gets `already_processing`
+    // ─────────────────────────────────────────────────────────
+    it('case #11c — double-open stream → second gets `already_processing` and the fake is called once', async () => {
+      const { user, accessToken } = await registerAndLogin(app, 'p-solve-dbl');
+      try {
+        const child = await createChild(prisma, { userId: user.id });
+        const createRes = await request(app.getHttpServer())
+          .post('/problems')
+          .set('Authorization', `Bearer ${accessToken}`)
+          .field('childId', String(child.id))
+          .attach('image', TINY_PNG)
+          .expect(201);
+        const problemId = createRes.body.data.id as number;
+
+        const port = baseUrl();
+        const url = `${port}/problems/${problemId}/stream`;
+
+        // Open both streams. The default success events resolve
+        // quickly (microtasks), so by the time the second fetch
+        // hits the server, the first is already mid-flight and the
+        // row is `solving`.
+        const firstEvents: Array<{ event: string | null; data: unknown }> = [];
+        const secondEvents: Array<{ event: string | null; data: unknown }> = [];
+
+        const c1 = (async () => {
+          for await (const f of consumeSse(url, accessToken)) {
+            firstEvents.push(f);
+          }
+        })();
+        const c2 = (async () => {
+          for await (const f of consumeSse(url, accessToken)) {
+            secondEvents.push(f);
+          }
+        })();
+        await Promise.all([c1, c2]);
+
+        // One of the two streams saw `done` (the winner) and the
+        // other saw `already_processing` (the loser). Which one is
+        // which is non-deterministic by race, so check the union.
+        const winner = [...firstEvents, ...secondEvents].filter(
+          (e) => e.event === 'done',
+        );
+        const loser = [...firstEvents, ...secondEvents].filter(
+          (e) => e.event === 'status' &&
+            (e.data as { status?: string })?.status === 'already_processing',
+        );
+        expect(winner).toHaveLength(1);
+        expect(loser).toHaveLength(1);
+
+        // The fake was called exactly once across both opens.
+        expect(fakeAi.streamCallCount).toBe(1);
+      } finally {
+        await cleanupTestUser(user.id);
+      }
     });
   });
 });
