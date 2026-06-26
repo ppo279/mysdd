@@ -2,6 +2,7 @@ import { INestApplication } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import request from 'supertest';
 import { AppModule } from '../../src/app.module';
+import { AllExceptionsFilter } from '../../src/common/filters/all-exceptions.filter';
 import { buildValidationPipe } from '../../src/common/validation';
 
 /**
@@ -41,6 +42,9 @@ describe('AuthModule (e2e)', () => {
     app = moduleFixture.createNestApplication();
     // Use the SAME validation pipe as production (shared in src/common).
     app.useGlobalPipes(buildValidationPipe());
+    // Mirror production's error envelope (success envelope comes via
+    // APP_INTERCEPTOR in AppModule).
+    app.useGlobalFilters(new AllExceptionsFilter());
     await app.init();
   });
 
@@ -59,11 +63,11 @@ describe('AuthModule (e2e)', () => {
         .send({ email, password: VALID_PASSWORD })
         .expect(201);
 
-      expect(res.body).toMatchObject({ email });
-      expect(res.body).toHaveProperty('id');
-      expect(res.body).toHaveProperty('createTime');
+      expect(res.body.data).toMatchObject({ email });
+      expect(res.body.data).toHaveProperty('id');
+      expect(res.body.data).toHaveProperty('createTime');
       // passwordHash MUST NOT be returned
-      expect(res.body).not.toHaveProperty('passwordHash');
+      expect(res.body.data).not.toHaveProperty('passwordHash');
     });
 
     it('400 — invalid email format returns Chinese validation message', async () => {
@@ -120,8 +124,8 @@ describe('AuthModule (e2e)', () => {
         .send({ email: existingEmail, password: VALID_PASSWORD })
         .expect(200);
 
-      expect(typeof res.body.accessToken).toBe('string');
-      expect(res.body.accessToken.split('.').length).toBe(3); // valid JWT shape
+      expect(typeof res.body.data.accessToken).toBe('string');
+      expect(res.body.data.accessToken.split('.').length).toBe(3); // valid JWT shape
     });
 
     it('payload — JWT contains userId + email, NEVER password', async () => {
@@ -130,7 +134,7 @@ describe('AuthModule (e2e)', () => {
         .send({ email: existingEmail, password: VALID_PASSWORD })
         .expect(200);
 
-      const payload = decodeJwtPayload(res.body.accessToken);
+      const payload = decodeJwtPayload(res.body.data.accessToken);
 
       expect(payload).toHaveProperty('userId');
       expect(payload).toHaveProperty('email', existingEmail);
@@ -212,7 +216,7 @@ describe('AuthModule (e2e)', () => {
         .post('/auth/login')
         .send({ email: meEmail, password: VALID_PASSWORD })
         .expect(200);
-      token = res.body.accessToken;
+      token = res.body.data.accessToken;
     });
 
     it('200 — valid Bearer token returns current user', async () => {
@@ -221,9 +225,9 @@ describe('AuthModule (e2e)', () => {
         .set('Authorization', `Bearer ${token}`)
         .expect(200);
 
-      expect(res.body).toMatchObject({ email: meEmail });
-      expect(res.body).toHaveProperty('id');
-      expect(res.body).not.toHaveProperty('passwordHash');
+      expect(res.body.data).toMatchObject({ email: meEmail });
+      expect(res.body.data).toHaveProperty('id');
+      expect(res.body.data).not.toHaveProperty('passwordHash');
     });
 
     it('401 — missing Authorization header', async () => {
