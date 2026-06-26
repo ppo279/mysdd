@@ -7,17 +7,7 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { Request } from 'express';
 import { ConfigService } from '@nestjs/config';
-
-/**
- * Shape of the JWT payload we issue.
- * Keep this minimal — anything you put here is publicly decodable.
- */
-export interface JwtPayload {
-  /** numeric user id */
-  userId: number;
-  /** user's email (handy for logs, not security-critical) */
-  email: string;
-}
+import type { JwtPayload } from '../jwt-payload';
 
 /**
  * Validates the `Authorization: Bearer <token>` header.
@@ -49,7 +39,7 @@ export class JwtAuthGuard implements CanActivate {
         secret: this.config.getOrThrow<string>('JWT_SECRET'),
       });
       // Attach for downstream handlers / @CurrentUser()
-      (req as Request & { user: JwtPayload }).user = payload;
+      req.user = payload;
       return true;
     } catch {
       // jwt.verifyAsync throws on expired / malformed / bad signature.

@@ -16,8 +16,8 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import type { JwtPayload } from '../auth/guards/jwt-auth.guard';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import type { JwtPayload } from '../auth/jwt-payload';
 import { RawResponse } from '../common/decorators/raw-response.decorator';
 import { CreateProblemDto } from './dto/create-problem.dto';
 import { ProblemsService } from './problems.service';

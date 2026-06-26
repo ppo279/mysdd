@@ -35,8 +35,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     const response = ctx.getResponse<Response>();
     const request = ctx.getRequest<Request>();
 
-    const traceId =
-      (request as Request & { traceId?: string }).traceId ?? randomUUID();
+    const traceId = request.traceId ?? randomUUID();
 
     let status: number;
     let message: string;

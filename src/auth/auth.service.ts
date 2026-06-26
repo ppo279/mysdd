@@ -10,7 +10,7 @@ import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
-import type { JwtPayload } from './guards/jwt-auth.guard';
+import type { JwtPayload } from './jwt-payload';
 
 const BCRYPT_ROUNDS = 12;
 
