@@ -4,6 +4,7 @@ import {
   ExceptionFilter,
   HttpException,
   Logger,
+  PayloadTooLargeException,
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { Request, Response } from 'express';
@@ -18,6 +19,7 @@ import { Request, Response } from 'express';
  * | HttpException (e.g. 401, 409)        | status | exception.message    | no      |
  * | Nest default 404 (Cannot GET /...)   | 404    | 接口路径不存在       | no      |
  * | Nest default 405 (Method Not Allowed)| 405    | 请求方法不被允许      | no      |
+ * | PayloadTooLargeException (multer)    | 413    | 图片过大，最大 10MB   | no      |
  * | Non-HttpException (raw Error)        | 500    | 服务器内部错误        | YES     |
  *
  * 5xx logging: writes `[traceId] <error message>` with the full stack.
@@ -50,6 +52,14 @@ export class AllExceptionsFilter implements ExceptionFilter {
         message = '接口路径不存在';
       } else if (status === 405) {
         message = '请求方法不被允许';
+      } else if (exception instanceof PayloadTooLargeException) {
+        // Multer raises this when a FileInterceptor's limits.fileSize is
+        // exceeded. Per `docs/issues/001-problems-upload-read-image.md`
+        // acceptance criteria, the locked response is 400 (not the
+        // semantically-correct 413) so we override both status AND
+        // message here.
+        status = 400;
+        message = '图片过大，最大 10MB';
       }
     } else {
       status = 500;

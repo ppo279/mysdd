@@ -6,12 +6,16 @@ import { WrapResponseInterceptor } from './common/interceptors/wrap-response.int
 import { AuthModule } from './auth/auth.module';
 import { HealthController } from './health.controller';
 import { PrismaModule } from './prisma/prisma.module';
+import { ProblemsModule } from './problems/problems.module';
+import { StorageModule } from './storage/storage.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     PrismaModule,
     AuthModule,
+    StorageModule,
+    ProblemsModule,
   ],
   controllers: [HealthController],
   providers: [

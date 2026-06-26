@@ -35,5 +35,9 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtAuthGuard],
+  // Re-export so downstream modules (e.g. ProblemsModule) can use the
+  // guard and resolve JwtService without having to re-register their own
+  // JwtModule (which would mean duplicated config + two secret sources).
+  exports: [JwtAuthGuard, JwtModule],
 })
 export class AuthModule {}
