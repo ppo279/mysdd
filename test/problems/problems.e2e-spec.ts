@@ -266,6 +266,87 @@ describe('ProblemsModule (e2e)', () => {
         await cleanupTestUser(user.id);
       }
     });
+
+    // ─────────────────────────────────────────────────────────
+    // case #8 — storage.put failure → 500 + DB row status=failed,
+    // no file on disk (rollback path; deferred from issue 001 PoC,
+    // now covered as backlog item 003-case#8).
+    //
+    // Triggers ProblemsService.create step-3 catch:
+    //   - storage.put throws (mocked below)
+    //   - markFailed(problem.id) flips DB row to status='failed'
+    //   - InternalServerErrorException surfaces as 500
+    //
+    // Observable assertions:
+    //   - 500 with envelope { code: 500, message: '服务器内部错误', traceId }
+    //   - DB row exists with status='failed', imageUrl='' (placeholder
+    //     preserved because step 4 never ran)
+    //   - No file under ./uploads/problems/<userId>/ (storage.put
+    //     threw before writeFile completed)
+    // ─────────────────────────────────────────────────────────
+    it('case #8 — storage.put failure rolls back to DB status=failed with no orphan file', async () => {
+      const storage = app.get(LocalDiskStorageService);
+      // `useExisting` means STORAGE_SERVICE and LocalDiskStorageService
+      // are the SAME singleton — spying on the class method is
+      // sufficient to make ProblemsService see the throw.
+      const putSpy = jest
+        .spyOn(storage, 'put')
+        .mockRejectedValue(new Error('forced: disk full (case #8)'));
+
+      const { user, accessToken } = await registerAndLogin(app, 'p-fail');
+      try {
+        const child = await createChild(prisma, { userId: user.id });
+
+        // The upload itself should 500 — the global exception filter
+        // wraps the InternalServerErrorException in the standard error
+        // envelope (see AllExceptionsFilter + WrapResponseInterceptor).
+        const res = await request(app.getHttpServer())
+          .post('/problems')
+          .set('Authorization', `Bearer ${accessToken}`)
+          .field('childId', String(child.id))
+          .attach('image', TINY_PNG)
+          .expect(500);
+
+        expect(res.body.code).toBe(500);
+        expect(res.body.message).toBe('服务器内部错误');
+        expect(res.body).toHaveProperty('traceId');
+
+        // The DB row should exist (created with placeholder imageUrl=''
+        // in step 2) and be flipped to status='failed' by markFailed
+        // in the step-3 catch. imageUrl stays '' because step 4
+        // (update with real key) never ran.
+        const rows = await prisma.problem.findMany({
+          where: { childId: child.id },
+        });
+        expect(rows).toHaveLength(1);
+        expect(rows[0]!.status).toBe('failed');
+        expect(rows[0]!.imageUrl).toBe('');
+
+        // No file should have been written under the user's uploads
+        // directory. readdir throws ENOENT when the dir never existed
+        // (storage.put threw before mkdir) — normalize to an empty
+        // array so the assertion is "no files" regardless of whether
+        // the directory was created.
+        const userDir = resolve(
+          process.cwd(),
+          'uploads',
+          'problems',
+          String(user.id),
+        );
+        const files = await fs.readdir(userDir).catch((err: unknown) => {
+          if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+          throw err;
+        });
+        expect(files).toEqual([]);
+
+        // The spy was actually invoked (proves we hit the failure
+        // branch, not a different 500 path).
+        expect(putSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        putSpy.mockRestore();
+        await cleanupTestUser(user.id);
+      }
+    });
   });
 
   // ─────────────────────────────────────────────────────────────
