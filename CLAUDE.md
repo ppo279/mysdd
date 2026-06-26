@@ -373,3 +373,19 @@ new ValidationPipe({
 | `db/init/01-extensions.sql` | 首次启动装扩展 |
 | `.env` / `.env.example` | 环境变量（前者 gitignored） |
 | `pnpm-workspace.yaml` | workspace + allowBuilds（`prisma` / `@prisma/engines` / `bcrypt` / `unrs-resolver`） |
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues on `ppo279/mysdd`. External PRs are NOT a triage surface. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Five canonical roles with default strings: `needs-triage` / `needs-info` / `ready-for-agent` / `ready-for-human` / `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context — one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+> Local PRD / issue drafts: see `docs/prd/*.md` and `docs/issues/*.md` — these are the source material published to GitHub Issues (do not double-write).
