@@ -1,24 +1,28 @@
-import { IsInt, IsString, Max, MaxLength, Min } from 'class-validator';
+import {
+  IsInt,
+  IsNotEmpty,
+  IsString,
+  Max,
+  MaxLength,
+  Min,
+} from 'class-validator';
 
 /**
- * DTO for creating a Child row.
- *
- * Status: DRAFT (003 #2). The `ChildrenModule` is a separate PRD
- * (not yet started); this DTO is the source of truth for the
- * `grade` range that the eventual `POST /children` endpoint will
- * accept. It is NOT yet wired into any controller — the e2e
- * tests in `test/problems/` create children via `prisma.child.create`
- * directly, which is the established pattern until ChildrenModule
- * lands (see `docs/prd/problems.md` §"Prerequisites").
+ * DTO for `POST /children`.
  *
  * The 1..12 range mirrors the DB CHECK constraint added in
  * `prisma/migrations/20260629110000_add_child_grade_range_check/`.
  * Both layers must agree: the DTO rejects bad payloads at the API
  * boundary (clean 400), the DB rejects direct-write bypasses
  * (defense in depth).
+ *
+ * `@IsNotEmpty` on `name` catches the empty-string case that
+ * `@MaxLength(50)` alone lets through (`''` is 0 chars, under the
+ * limit but semantically useless).
  */
 export class CreateChildDto {
   @IsString({ message: 'name 必须是字符串' })
+  @IsNotEmpty({ message: 'name 不能为空' })
   @MaxLength(50, { message: 'name 长度不能超过 50' })
   name!: string;
 

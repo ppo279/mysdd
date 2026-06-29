@@ -94,9 +94,9 @@ describe('Janitor (e2e)', () => {
   // ─────────────────────────────────────────────────────────────
   describe('StuckSolvingJob', () => {
     it('case A — row at solving >5min ago gets reset to pending', async () => {
-      const { user } = await registerAndLogin(app, 'j-stuck-old');
+      const { user, accessToken } = await registerAndLogin(app, 'j-stuck-old');
       try {
-        const child = await createChild(prisma, { userId: user.id });
+        const child = await createChild(app, { accessToken });
         const problem = await prisma.problem.create({
           data: {
             childId: child.id,
@@ -130,9 +130,12 @@ describe('Janitor (e2e)', () => {
     });
 
     it('case B — row at solving <2min ago is NOT touched (false-positive guard)', async () => {
-      const { user } = await registerAndLogin(app, 'j-stuck-young');
+      const { user, accessToken } = await registerAndLogin(
+        app,
+        'j-stuck-young',
+      );
       try {
-        const child = await createChild(prisma, { userId: user.id });
+        const child = await createChild(app, { accessToken });
         const problem = await prisma.problem.create({
           data: {
             childId: child.id,
@@ -191,9 +194,12 @@ describe('Janitor (e2e)', () => {
     });
 
     it('case D — file on disk with matching DB row at status=pending is KEPT', async () => {
-      const { user } = await registerAndLogin(app, 'j-orphan-live');
+      const { user, accessToken } = await registerAndLogin(
+        app,
+        'j-orphan-live',
+      );
       try {
-        const child = await createChild(prisma, { userId: user.id });
+        const child = await createChild(app, { accessToken });
         const fileName = `${randomUUID()}.png`;
         const imageUrl = `problems/${user.id}/${fileName}`;
         const fullPath = await writeFakeFile(user.id, fileName);
@@ -214,9 +220,12 @@ describe('Janitor (e2e)', () => {
     });
 
     it('case E — file on disk with matching DB row at status=failed IS deleted (failed-upload residue)', async () => {
-      const { user } = await registerAndLogin(app, 'j-orphan-failed');
+      const { user, accessToken } = await registerAndLogin(
+        app,
+        'j-orphan-failed',
+      );
       try {
-        const child = await createChild(prisma, { userId: user.id });
+        const child = await createChild(app, { accessToken });
         const fileName = `${randomUUID()}.png`;
         const imageUrl = `problems/${user.id}/${fileName}`;
         const fullPath = await writeFakeFile(user.id, fileName);

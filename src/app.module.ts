@@ -4,6 +4,7 @@ import { APP_INTERCEPTOR } from '@nestjs/core';
 import { TraceIdMiddleware } from './common/middleware/trace-id.middleware';
 import { WrapResponseInterceptor } from './common/interceptors/wrap-response.interceptor';
 import { AuthModule } from './auth/auth.module';
+import { ChildrenModule } from './children/children.module';
 import { HealthController } from './health.controller';
 import { AnthropicModule } from './integrations/anthropic/anthropic.module';
 import { JanitorModule } from './janitor/janitor.module';
@@ -26,6 +27,9 @@ import { StorageModule } from './storage/storage.module';
     // `JanitorService` for the interval + first-tick semantics.
     JanitorModule,
     ProblemsModule,
+    // Children CRUD — see docs/prd/children.md. Imports AuthModule
+    // for JwtAuthGuard; PrismaService comes from the global PrismaModule.
+    ChildrenModule,
   ],
   controllers: [HealthController],
   providers: [

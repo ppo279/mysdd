@@ -135,7 +135,9 @@ describe('ProblemsModule (e2e)', () => {
       const owner = await registerAndLogin(app, 'p-child-owner');
       const attacker = await registerAndLogin(app, 'p-child-attacker');
       try {
-        const child = await createChild(prisma, { userId: owner.user.id });
+        const child = await createChild(app, {
+          accessToken: owner.accessToken,
+        });
 
         const res = await request(app.getHttpServer())
           .post('/problems')
@@ -156,7 +158,7 @@ describe('ProblemsModule (e2e)', () => {
     it('case #4 — 400 不支持的图片格式 when MIME is not on whitelist', async () => {
       const { user, accessToken } = await registerAndLogin(app, 'p-bad-mime');
       try {
-        const child = await createChild(prisma, { userId: user.id });
+        const child = await createChild(app, { accessToken });
 
         const res = await request(app.getHttpServer())
           .post('/problems')
@@ -181,7 +183,7 @@ describe('ProblemsModule (e2e)', () => {
     it('case #5 — 400 图片过大 when file exceeds 10 MB', async () => {
       const { user, accessToken } = await registerAndLogin(app, 'p-big');
       try {
-        const child = await createChild(prisma, { userId: user.id });
+        const child = await createChild(app, { accessToken });
 
         const huge = Buffer.alloc(11 * 1024 * 1024, 0xff);
         const res = await request(app.getHttpServer())
@@ -205,7 +207,7 @@ describe('ProblemsModule (e2e)', () => {
     it('case #6 — 400 请上传题目图片 when image field is missing', async () => {
       const { user, accessToken } = await registerAndLogin(app, 'p-no-image');
       try {
-        const child = await createChild(prisma, { userId: user.id });
+        const child = await createChild(app, { accessToken });
 
         const res = await request(app.getHttpServer())
           .post('/problems')
@@ -224,7 +226,7 @@ describe('ProblemsModule (e2e)', () => {
     it('case #7 — 201 happy path creates problem + writes file + maps imageUrl to API path', async () => {
       const { user, accessToken } = await registerAndLogin(app, 'p-happy');
       try {
-        const child = await createChild(prisma, { userId: user.id });
+        const child = await createChild(app, { accessToken });
 
         const res = await request(app.getHttpServer())
           .post('/problems')
@@ -296,7 +298,7 @@ describe('ProblemsModule (e2e)', () => {
 
       const { user, accessToken } = await registerAndLogin(app, 'p-fail');
       try {
-        const child = await createChild(prisma, { userId: user.id });
+        const child = await createChild(app, { accessToken });
 
         // The upload itself should 500 — the global exception filter
         // wraps the InternalServerErrorException in the standard error
@@ -362,7 +364,9 @@ describe('ProblemsModule (e2e)', () => {
       const owner = await registerAndLogin(app, 'p-idor-owner');
       const attacker = await registerAndLogin(app, 'p-idor-attacker');
       try {
-        const child = await createChild(prisma, { userId: owner.user.id });
+        const child = await createChild(app, {
+          accessToken: owner.accessToken,
+        });
         const createRes = await request(app.getHttpServer())
           .post('/problems')
           .set('Authorization', `Bearer ${owner.accessToken}`)
@@ -398,7 +402,7 @@ describe('ProblemsModule (e2e)', () => {
     it('case #9d — 200 returns the problem with API-mapped imageUrl + null solution', async () => {
       const { user, accessToken } = await registerAndLogin(app, 'p-read-ok');
       try {
-        const child = await createChild(prisma, { userId: user.id });
+        const child = await createChild(app, { accessToken });
         const createRes = await request(app.getHttpServer())
           .post('/problems')
           .set('Authorization', `Bearer ${accessToken}`)
@@ -438,7 +442,9 @@ describe('ProblemsModule (e2e)', () => {
       const owner = await registerAndLogin(app, 'p-img-owner');
       const attacker = await registerAndLogin(app, 'p-img-attacker');
       try {
-        const child = await createChild(prisma, { userId: owner.user.id });
+        const child = await createChild(app, {
+          accessToken: owner.accessToken,
+        });
         const createRes = await request(app.getHttpServer())
           .post('/problems')
           .set('Authorization', `Bearer ${owner.accessToken}`)
@@ -461,7 +467,7 @@ describe('ProblemsModule (e2e)', () => {
     it('case #12c — 200 returns the original image bytes with correct Content-Type', async () => {
       const { user, accessToken } = await registerAndLogin(app, 'p-img-ok');
       try {
-        const child = await createChild(prisma, { userId: user.id });
+        const child = await createChild(app, { accessToken });
         const createRes = await request(app.getHttpServer())
           .post('/problems')
           .set('Authorization', `Bearer ${accessToken}`)
@@ -494,7 +500,7 @@ describe('ProblemsModule (e2e)', () => {
       // The image endpoint must reject it identically to IDOR miss.
       const { user, accessToken } = await registerAndLogin(app, 'p-img-failed');
       try {
-        const child = await createChild(prisma, { userId: user.id });
+        const child = await createChild(app, { accessToken });
         const problem = await prisma.problem.create({
           data: {
             childId: child.id,
@@ -583,7 +589,9 @@ describe('ProblemsModule (e2e)', () => {
       const owner = await registerAndLogin(app, 'p-stream-owner');
       const attacker = await registerAndLogin(app, 'p-stream-attacker');
       try {
-        const child = await createChild(prisma, { userId: owner.user.id });
+        const child = await createChild(app, {
+          accessToken: owner.accessToken,
+        });
         const createRes = await request(app.getHttpServer())
           .post('/problems')
           .set('Authorization', `Bearer ${owner.accessToken}`)
@@ -621,7 +629,7 @@ describe('ProblemsModule (e2e)', () => {
         'p-solve-happy',
       );
       try {
-        const child = await createChild(prisma, { userId: user.id });
+        const child = await createChild(app, { accessToken });
         const createRes = await request(app.getHttpServer())
           .post('/problems')
           .set('Authorization', `Bearer ${accessToken}`)
@@ -692,7 +700,7 @@ describe('ProblemsModule (e2e)', () => {
 
       const { user, accessToken } = await registerAndLogin(app, 'p-solve-fail');
       try {
-        const child = await createChild(prisma, { userId: user.id });
+        const child = await createChild(app, { accessToken });
         const createRes = await request(app.getHttpServer())
           .post('/problems')
           .set('Authorization', `Bearer ${accessToken}`)
@@ -731,7 +739,7 @@ describe('ProblemsModule (e2e)', () => {
     it('case #11c — double-open stream → second gets `already_processing` and the fake is called once', async () => {
       const { user, accessToken } = await registerAndLogin(app, 'p-solve-dbl');
       try {
-        const child = await createChild(prisma, { userId: user.id });
+        const child = await createChild(app, { accessToken });
         const createRes = await request(app.getHttpServer())
           .post('/problems')
           .set('Authorization', `Bearer ${accessToken}`)
@@ -818,8 +826,8 @@ describe('ProblemsModule (e2e)', () => {
           fakeAi.setEvents(defaultSuccessEvents());
           const callCountBefore = fakeAi.streamCallCount;
 
-          const child = await createChild(prisma, {
-            userId: user.id,
+          const child = await createChild(app, {
+            accessToken,
             grade: tc.grade,
           });
           const createRes = await request(app.getHttpServer())

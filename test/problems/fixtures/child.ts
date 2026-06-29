@@ -1,23 +1,38 @@
-import type { Child } from '@prisma/client';
-import type { PrismaService } from '../../../src/prisma/prisma.service';
+import type { INestApplication } from '@nestjs/common';
+import request from 'supertest';
 
 /**
- * Create a Child row directly via Prisma — there is no `POST /children`
- * endpoint yet (`ChildrenModule` is tracked as a separate PRD). Tests
- * skip the HTTP layer because none exists; once that lands, this helper
- * switches to `POST /children` and nothing else changes.
+ * Create a Child row via the real `POST /children` endpoint.
  *
- * Defaults: name `'测试娃'`, grade `5`. Override per-test as needed.
+ * Why HTTP and not `prisma.child.create`:
+ * - Exercises the production code path. The test suite catches
+ *   DTO drift (e.g. if `@Min(1) @Max(12)` is ever loosened) before
+ *   the API can ship broken validation.
+ * - Every problems e2e test goes through the same endpoint a
+ *   production parent would hit — there's no longer a parallel
+ *   "test-only" path that bypasses validation/IDOR/auditing.
+ *
+ * The caller is responsible for the resulting child's lifecycle:
+ * `cleanupUser` (from `fixtures/user.ts`) deletes in FK-safe order
+ * (solutions → problems → children → user), so a child created here
+ * is cleaned up when the parent user is dropped.
  */
+export interface CreatedChild {
+  id: number;
+  name: string;
+  grade: number;
+  createTime: string;
+}
+
 export async function createChild(
-  prisma: PrismaService,
-  args: { userId: number; name?: string; grade?: number },
-): Promise<Child> {
-  return prisma.child.create({
-    data: {
-      userId: args.userId,
-      name: args.name ?? '测试娃',
-      grade: args.grade ?? 5,
-    },
-  });
+  app: INestApplication,
+  args: { accessToken: string; name?: string; grade?: number },
+): Promise<CreatedChild> {
+  const res = await request(app.getHttpServer())
+    .post('/children')
+    .set('Authorization', `Bearer ${args.accessToken}`)
+    .send({ name: args.name ?? '测试娃', grade: args.grade ?? 5 })
+    .expect(201);
+
+  return res.body.data as CreatedChild;
 }
