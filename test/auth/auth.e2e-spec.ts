@@ -231,7 +231,9 @@ describe('AuthModule (e2e)', () => {
     });
 
     it('401 — missing Authorization header', async () => {
-      const res = await request(app.getHttpServer()).get('/auth/me').expect(401);
+      const res = await request(app.getHttpServer())
+        .get('/auth/me')
+        .expect(401);
       expect(res.body.message).toMatch(/缺少 Authorization/);
     });
 

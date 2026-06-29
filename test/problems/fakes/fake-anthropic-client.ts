@@ -114,11 +114,22 @@ class FakeAnthropicStream implements AnthropicStream {
     });
   }
 
-  on(event: 'thinking', listener: (delta: string, snapshot: string) => void): unknown;
-  on(event: 'text', listener: (delta: string, snapshot: string) => void): unknown;
+  on(
+    event: 'thinking',
+    listener: (delta: string, snapshot: string) => void,
+  ): unknown;
+  on(
+    event: 'text',
+    listener: (delta: string, snapshot: string) => void,
+  ): unknown;
   on(event: 'error', listener: (err: unknown) => void): unknown;
   on(event: 'end', listener: () => void): unknown;
-  on(event: string, listener: (...args: unknown[]) => void): unknown {
+  // Implementation signature is widened with `any` so the overloads
+  // above are assignable to it. The fake dispatches per event name
+  // with the right arg shape — see the switch below. The solver only
+  // ever registers listeners whose types match the corresponding
+  // overload, so this widening is safe at the call sites we use.
+  on(event: string, listener: (...args: any[]) => any): unknown {
     switch (event) {
       case 'thinking':
         this.listeners.thinking.add(listener as (d: string, s: string) => void);
@@ -154,17 +165,19 @@ class FakeAnthropicStream implements AnthropicStream {
     queueMicrotask(() => void this.replay());
   }
 
-  private async replay(): Promise<void> {
+  private replay(): void {
     for (const event of this.events) {
       switch (event.kind) {
         case 'thinking': {
           this.thinkingSnapshot += event.text;
-          for (const fn of this.listeners.thinking) fn(event.text, this.thinkingSnapshot);
+          for (const fn of this.listeners.thinking)
+            fn(event.text, this.thinkingSnapshot);
           break;
         }
         case 'text': {
           this.textSnapshot += event.text;
-          for (const fn of this.listeners.text) fn(event.text, this.textSnapshot);
+          for (const fn of this.listeners.text)
+            fn(event.text, this.textSnapshot);
           break;
         }
         case 'end': {

@@ -136,9 +136,7 @@ describe('Response envelope (e2e)', () => {
   // ─────────────────────────────────────────────────────────────
   describe('Cycle 5 — @RawResponse() opt-out', () => {
     it('GET /health (decorated) returns unwrapped body, no envelope fields', async () => {
-      const res = await request(app.getHttpServer())
-        .get('/health')
-        .expect(200);
+      const res = await request(app.getHttpServer()).get('/health').expect(200);
 
       // Not wrapped — body has direct fields, no code/message envelope
       expect(res.body).toHaveProperty('status', 'ok');
@@ -179,7 +177,9 @@ describe('Response envelope (e2e)', () => {
       });
       // Internal error message must NOT appear in the response body
       expect(JSON.stringify(res.body)).not.toMatch(/10\.0\.0\.5/);
-      expect(JSON.stringify(res.body)).not.toMatch(/Database connection refused/);
+      expect(JSON.stringify(res.body)).not.toMatch(
+        /Database connection refused/,
+      );
     });
   });
 });

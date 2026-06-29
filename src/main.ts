@@ -17,4 +17,13 @@ async function bootstrap() {
 
   await app.listen(process.env.PORT ?? 3000);
 }
-bootstrap();
+
+bootstrap().catch((err: unknown) => {
+  // bootstrap() failure is fatal — surface it to stderr with a stack
+  // and exit non-zero. Without this, the floating promise silently
+  // swallows startup errors and the process keeps running with a
+  // half-initialized app.
+
+  console.error('Failed to start Nest application:', err);
+  process.exit(1);
+});
