@@ -305,19 +305,93 @@ function streamToBuffer(stream: Readable): Promise<Buffer> {
 }
 
 /**
- * Hardcoded system prompt. Phase 2 will graduate this to a per-grade
- * mapping table (see `docs/issues/003-problems-phase-2-backlog.md`).
+ * Grade band → system prompt. Each tier has a distinct marker in
+ * square brackets at the start of the prompt so tests can grep for
+ * it (`fakeAi.lastBody.system` carries the system prompt the
+ * solver hands to the SDK).
  *
- * The instruction "think first, then answer" matches MiniMax-M3's
- * `thinking: adaptive` mode — the model emits reasoning as a
- * separate content block before the final answer.
+ * Tiers:
+ * - `primary` (1-6):   小学 — simple, life-example-based, gentle.
+ * - `middle`  (7-12):  中学 — moderate abstraction, formula-friendly.
+ * - `higher`  (13+):   高阶 — formal, symbolic, proof-oriented.
+ *
+ * Out-of-range fallback (`grade` is not a positive integer, or the
+ * Child.grade CHECK constraint is bypassed somehow): the `default`
+ * tier is used. The migration adding the CHECK lives in
+ * `prisma/migrations/<date>_add_child_grade_range_check` and
+ * enforces `1 <= grade <= 12`, so the default branch is only
+ * reachable during tests or future schema drift.
+ */
+type GradeTier = 'primary' | 'middle' | 'higher' | 'default';
+
+const PROMPT_BY_TIER: Record<GradeTier, string> = {
+  primary: [
+    '【小学阶段】',
+    '你是一位为小学生服务的辅导老师。',
+    '请先在脑中推理（用 "思考" 通道），然后再给出最终答案。',
+    '用生活里的具体物品打比方（比如苹果、糖果），把抽象概念变成画面。',
+    '遇到几何题尽量用文字描述图形（"左边一个三角形，右边一个正方形"）。',
+    '遇到应用题列出已知条件与求解目标，每一步算完都告诉孩子"我们在算什么"。',
+    '最后一行以 "答案：" 开头，给出一句话总结。',
+  ].join('\n'),
+  middle: [
+    '【中学阶段】',
+    '你是一位为中学生服务的辅导老师。',
+    '请先在脑中推理（用 "思考" 通道），然后再给出最终答案。',
+    '可以使用符号、公式和规范的数学表达，不必每一步都用日常语言翻译。',
+    '遇到几何题画辅助线、标注关键角或边；遇到应用题用"已知…求…"框架列条件。',
+    '解释清楚每一步变形/代入的根据，不要跳步。',
+    '最后一行以 "答案：" 开头，给出一句话总结。',
+  ].join('\n'),
+  higher: [
+    '【高阶阶段】',
+    '你是一位为高阶学习者（大学/竞赛/成人）服务的辅导老师。',
+    '请先在脑中推理（用 "思考" 通道），然后再给出最终答案。',
+    '使用严格的数学符号和术语，必要时给出证明或推导过程。',
+    '列出关键假设和所用定理/引理；对边界条件、唯一性、收敛性等做必要说明。',
+    '最后一行以 "答案：" 开头，给出一句话总结。',
+  ].join('\n'),
+  default: [
+    '【默认】',
+    '你是一位辅导老师。',
+    '请先在脑中推理（用 "思考" 通道），然后再给出最终答案。',
+    '请用通用的、可读的解释风格。',
+    '最后一行以 "答案：" 开头，给出一句话总结。',
+  ].join('\n'),
+};
+
+function tierForGradeInternal(grade: number): GradeTier {
+  if (Number.isInteger(grade) && grade >= 1 && grade <= 6) return 'primary';
+  if (Number.isInteger(grade) && grade >= 7 && grade <= 12) return 'middle';
+  if (Number.isInteger(grade) && grade >= 13) return 'higher';
+  return 'default';
+}
+
+/**
+ * Map a `Child.grade` value to its system-prompt tier. Exported for
+ * unit tests; production code should call `buildSystemPrompt`
+ * directly rather than going through this mapping. The DB CHECK
+ * constraint added in
+ * `prisma/migrations/20260629110000_add_child_grade_range_check/`
+ * enforces `1..12` at the storage layer, so the `higher` and
+ * `default` branches are only reachable during tests or future
+ * schema drift.
+ */
+export function tierForGrade(grade: number): GradeTier {
+  return tierForGradeInternal(grade);
+}
+
+/**
+ * Build the system prompt for a given `grade`.
+ *
+ * - Returns the `primary` tier for grades 1-6.
+ * - Returns the `middle` tier for grades 7-12.
+ * - Returns the `higher` tier for grades ≥13.
+ * - Falls back to `default` if the grade is not a positive integer
+ *   (non-integer, NaN, or ≤0). Schema-level enforcement of
+ *   `1 <= grade <= 12` lives in
+ *   `prisma/migrations/<date>_add_child_grade_range_check`.
  */
 export function buildSystemPrompt(grade: number): string {
-  return [
-    `你是一位为 ${grade} 年级学生服务的辅导老师。`,
-    '请先在脑中推理（用 "思考" 通道），然后再给出最终答案。',
-    '语言要适合该年级，浅显、直观、有耐心。',
-    '遇到几何题尽量用文字描述图形；遇到应用题列出已知条件与求解目标。',
-    '最后一行以 "答案：" 开头，给出一句话总结。',
-  ].join('\n');
+  return PROMPT_BY_TIER[tierForGradeInternal(grade)];
 }

@@ -10,6 +10,7 @@ import { ANTHROPIC_CLIENT } from '../../src/integrations/anthropic/anthropic.tok
 import { PrismaService } from '../../src/prisma/prisma.service';
 import { LocalDiskStorageService } from '../../src/storage/local-disk-storage.service';
 import { FakeAnthropicClient } from './fakes/fake-anthropic-client';
+import { defaultSuccessEvents } from './fakes/fake-anthropic-client';
 import { consumeSse } from './helpers/consume-sse';
 import { createChild } from './fixtures/child';
 import { cleanupUser, registerAndLogin } from './fixtures/user';
@@ -319,8 +320,8 @@ describe('ProblemsModule (e2e)', () => {
           where: { childId: child.id },
         });
         expect(rows).toHaveLength(1);
-        expect(rows[0]!.status).toBe('failed');
-        expect(rows[0]!.imageUrl).toBe('');
+        expect(rows[0].status).toBe('failed');
+        expect(rows[0].imageUrl).toBe('');
 
         // No file should have been written under the user's uploads
         // directory. readdir throws ENOENT when the dir never existed
@@ -615,7 +616,10 @@ describe('ProblemsModule (e2e)', () => {
     // row contents.
     // ─────────────────────────────────────────────────────────
     it('case #11a — happy path: streams status → reasoning_delta → content_delta → done; DB reaches done with a solution', async () => {
-      const { user, accessToken } = await registerAndLogin(app, 'p-solve-happy');
+      const { user, accessToken } = await registerAndLogin(
+        app,
+        'p-solve-happy',
+      );
       try {
         const child = await createChild(prisma, { userId: user.id });
         const createRes = await request(app.getHttpServer())
@@ -660,8 +664,9 @@ describe('ProblemsModule (e2e)', () => {
         // Model + thinking config in the request body — proves the
         // production solver code path is wired.
         expect(fakeAi.lastBody?.model).toBe('MiniMax-M3');
-        const thinking = (fakeAi.lastBody as { thinking?: { type: string } } | null)
-          ?.thinking;
+        const thinking = (
+          fakeAi.lastBody as { thinking?: { type: string } } | null
+        )?.thinking;
         expect(thinking).toEqual({ type: 'adaptive' });
 
         // DB state: status=done, exactly one Solution row.
@@ -764,7 +769,8 @@ describe('ProblemsModule (e2e)', () => {
           (e) => e.event === 'done',
         );
         const loser = [...firstEvents, ...secondEvents].filter(
-          (e) => e.event === 'status' &&
+          (e) =>
+            e.event === 'status' &&
             (e.data as { status?: string })?.status === 'already_processing',
         );
         expect(winner).toHaveLength(1);
@@ -772,6 +778,72 @@ describe('ProblemsModule (e2e)', () => {
 
         // The fake was called exactly once across both opens.
         expect(fakeAi.streamCallCount).toBe(1);
+      } finally {
+        await cleanupTestUser(user.id);
+      }
+    });
+
+    // ─────────────────────────────────────────────────────────
+    // case #11d — system prompt varies by grade tier (003 #5)
+    //
+    // Verifies the per-grade prompt mapping: grades 1-6 use the
+    // 小学 stage, 7-12 use 中学. The fake captures the system
+    // prompt via `lastBody.system`, which is exactly what the
+    // solver handed to the SDK.
+    //
+    // Boundary checks at the off-by-one edges (1 vs 6, 7 vs 12)
+    // make sure tier boundaries are inclusive where intended.
+    //
+    // The `higher` tier (grade >= 13) and the `default` fallback
+    // are covered in `test/problems/problem-solver.service.spec.ts`
+    // — they can't be reached here because the DB CHECK constraint
+    // added in 003 #2 rejects grades outside 1..12 at write time.
+    // ─────────────────────────────────────────────────────────
+    it('case #11d — system prompt varies by grade tier (1-6 / 7-12)', async () => {
+      const { user, accessToken } = await registerAndLogin(
+        app,
+        'p-prompt-tier',
+      );
+      try {
+        const tierCases = [
+          { grade: 1, marker: '【小学阶段】' },
+          { grade: 6, marker: '【小学阶段】' },
+          { grade: 7, marker: '【中学阶段】' },
+          { grade: 12, marker: '【中学阶段】' },
+        ];
+        for (const tc of tierCases) {
+          // Reset the fake's scripted events to the default success
+          // path (the previous test in this describe may have left
+          // an error-only script in place).
+          fakeAi.setEvents(defaultSuccessEvents());
+          const callCountBefore = fakeAi.streamCallCount;
+
+          const child = await createChild(prisma, {
+            userId: user.id,
+            grade: tc.grade,
+          });
+          const createRes = await request(app.getHttpServer())
+            .post('/problems')
+            .set('Authorization', `Bearer ${accessToken}`)
+            .field('childId', String(child.id))
+            .attach('image', TINY_PNG)
+            .expect(201);
+          const problemId = createRes.body.data.id as number;
+
+          const url = `${baseUrl()}/problems/${problemId}/stream`;
+          // Drain the SSE stream to completion.
+          for await (const _frame of consumeSse(url, accessToken)) {
+            // no-op; we only care about lastBody after the run
+          }
+
+          // Exactly one new SDK call per iteration (one fresh
+          // problem each time). lastBody carries the system
+          // prompt that the solver assembled.
+          expect(fakeAi.streamCallCount).toBe(callCountBefore + 1);
+          const sys = (fakeAi.lastBody as { system?: unknown } | null)?.system;
+          expect(typeof sys).toBe('string');
+          expect(sys as string).toContain(tc.marker);
+        }
       } finally {
         await cleanupTestUser(user.id);
       }

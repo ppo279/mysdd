@@ -1,0 +1,24 @@
+-- 003 #2: enforce Child.grade within school-grade bounds.
+--
+-- Rationale:
+--   `Child.grade` is a free `Int` in the schema. The system prompt
+--   tier mapping (`buildSystemPrompt` in
+--   `src/problems/problem-solver.service.ts`) and the planned
+--   `CreateChildDto` (in `src/children/dto/`) both expect 1..12.
+--   Without a DB-level check, malformed rows could enter via direct
+--   Prisma writes (the e2e test fixture does exactly that, intentionally).
+--
+-- The constraint:
+--   - 1..12 = PRC compulsory-education grades (primary 1-6 + junior/senior
+--     high 7-12). 13+ falls back to the `default` system prompt tier
+--     in the solver; out-of-range values must be rejected at write time
+--     so they never reach the solver.
+--   - Named so `prisma migrate diff` can roundtrip the schema
+--     declaration `@@check(grade >= 1 && grade <= 12, name: "child_grade_range")`.
+--
+-- Reversibility:
+--   `ALTER TABLE "Child" DROP CONSTRAINT "child_grade_range";`
+--   The constraint name is stable, so a future migration can drop it
+--   without needing to look up an OID.
+
+ALTER TABLE "Child" ADD CONSTRAINT "child_grade_range" CHECK (grade >= 1 AND grade <= 12);

@@ -38,12 +38,22 @@ model Child {
   name String
   grade Int
   createTime DateTime @default(now())
-  // 关系 
+  // 关系
   // 属于一个User
-  userId Int 
+  userId Int
   user User @relation(fields: [userId], references: [id])
   // 反向关系：一个孩子可以有多个题目
   problems Problem[]
+
+  // 003 #2: a DB-level CHECK constraint enforces `1 <= grade <= 12`.
+  // The `prisma-client-js` generator (used here) does not surface
+  // `@@check` in the schema language as of Prisma 7.8, so the
+  // constraint is declared in SQL only and the schema is the
+  // documentation. The matching migration is
+  // `prisma/migrations/20260629110000_add_child_grade_range_check/`.
+  // A future `CreateChildDto` will mirror the same range with
+  // `@Min(1) @Max(12)` so the API layer rejects bad input BEFORE
+  // the round trip to the DB.
 }
 // 题目
 model Problem {
