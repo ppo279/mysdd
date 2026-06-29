@@ -6,17 +6,17 @@ import { Readable } from 'stream';
 import { PutInput, PutResult, StorageService } from './storage.service';
 
 /**
- * MIME → file extension map for the four formats we accept on upload.
+ * MIME → file extension map for the three formats we accept on upload.
  * Multer's `fileFilter` only validates the type; the actual filename
  * extension comes from the user-uploaded file (truncated/sanitized),
  * falling back to the MIME map below.
  *
- * Locked by `docs/prd/problems.md` §"MIME 白名单".
+ * Locked by `docs/prd/problems.md` §"MIME 白名单" (GIF removed 2026-06-29,
+ * D4 grill integration — see GitHub issue #7).
  */
 const MIME_TO_EXT: Record<string, string> = {
   'image/jpeg': '.jpg',
   'image/png': '.png',
-  'image/gif': '.gif',
   'image/webp': '.webp',
 };
 

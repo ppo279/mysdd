@@ -277,7 +277,7 @@ export class ProblemsService {
 
 /**
  * Map a storage key's extension back to the upload-time MIME.
- * The whitelist is JPEG/PNG/GIF/WEBP — see `LocalDiskStorageService.MIME_TO_EXT`.
+ * The whitelist is JPEG/PNG/WEBP — see `LocalDiskStorageService.MIME_TO_EXT`.
  * Returns `application/octet-stream` if the extension is unexpected
  * (defense in depth — the controller's fileFilter should have prevented
  * anything reaching disk that's not on this list).
@@ -286,7 +286,6 @@ function mimeFromKey(key: string): string {
   const lower = key.toLowerCase();
   if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
   if (lower.endsWith('.png')) return 'image/png';
-  if (lower.endsWith('.gif')) return 'image/gif';
   if (lower.endsWith('.webp')) return 'image/webp';
   return 'application/octet-stream';
 }

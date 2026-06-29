@@ -72,7 +72,6 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 # === local Claude Code state (don't share with team) ===
 /.claude
 /.codefree
-/docs
 
 # === local upload artifacts (StorageService writes here) ===
 # ProblemsModule writes uploaded images here for the auth-protected

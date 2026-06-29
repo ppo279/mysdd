@@ -168,7 +168,7 @@ describe('ProblemsModule (e2e)', () => {
           })
           .expect(400);
         expect(res.body.message).toMatch(
-          /不支持的图片格式: image\/heic，仅允许 JPEG\/PNG\/GIF\/WEBP/,
+          /不支持的图片格式: image\/heic，仅允许 JPEG\/PNG\/WEBP/,
         );
       } finally {
         await cleanupTestUser(user.id);

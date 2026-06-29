@@ -29,7 +29,6 @@ export const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 export const ALLOWED_MIME: ReadonlySet<string> = new Set([
   'image/jpeg',
   'image/png',
-  'image/gif',
   'image/webp',
 ]);
 
@@ -80,7 +79,7 @@ export const problemImageMulterOptions: MulterOptions = {
     // Pass a Chinese message so the user sees the locked copy.
     cb(
       new BadRequestException(
-        `不支持的图片格式: ${file.mimetype}，仅允许 JPEG/PNG/GIF/WEBP`,
+        `不支持的图片格式: ${file.mimetype}，仅允许 JPEG/PNG/WEBP`,
       ),
       false,
     );

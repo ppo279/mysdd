@@ -129,7 +129,7 @@ export class ProblemSolverService {
     //    the image directly (no OCR). Storage gives us a Readable;
     //    we need a single Buffer for the Anthropic message body.
     let imageBuffer: Buffer;
-    let mediaType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
+    let mediaType: 'image/jpeg' | 'image/png' | 'image/webp';
     try {
       const stream = this.storage.read(problem.imageUrl);
       imageBuffer = await streamToBuffer(stream);
@@ -271,18 +271,17 @@ export class ProblemSolverService {
 
   /**
    * Map a storage key's extension back to the upload-time MIME.
-   * The whitelist (JPEG/PNG/GIF/WEBP) means we have a 1:1 map —
+   * The whitelist (JPEG/PNG/WEBP) means we have a 1:1 map —
    * `getImage` in ProblemsService uses the same logic, kept in sync
    * here by spec. Returns `image/png` as a defensive fallback for
    * unexpected extensions.
    */
   private mimeFromKey(
     key: string,
-  ): 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' {
+  ): 'image/jpeg' | 'image/png' | 'image/webp' {
     const lower = key.toLowerCase();
     if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
     if (lower.endsWith('.png')) return 'image/png';
-    if (lower.endsWith('.gif')) return 'image/gif';
     if (lower.endsWith('.webp')) return 'image/webp';
     return 'image/png';
   }
