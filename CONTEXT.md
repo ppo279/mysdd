@@ -156,19 +156,22 @@ G3 ───→ Q8 子补丁；触发新 issue（auth 信封化）
 
 ---
 
-## 5. 推进清单（下一步）
+## 5. 推进清单
 
-1. **PRD 同步修订**：把 §4 表里 ⚠️ 两项（GIF 砍掉、auth 信封化新增 issue）补回 `docs/prd/problems.md`
-2. **写 ADR**（已完成或下一步）：
-   - `docs/adr/0004-async-sse-ai-solve.md` — Q1 + Q7 异步 + SSE + 180s 超时
-   - `docs/adr/0005-idor-404-uniform.md` — Q4 单查询 + 404 统一 + 日志去区分
-   - `docs/adr/0006-storage-interface-local-disk.md` — Q3 接口 + 本地实现 + 切换 OSS 路径
-3. **`/to-prd` 调用**：以 CONTEXT.md + 3 个 ADR 为输入，让 `/to-prd` 检查现有 PRD 是否需要打补丁或重写
-4. **`/to-issues` 拆分**（预览，PRD 阶段细化）：
-   - **新 issue A**：auth 模块全局信封化（独立，不阻塞 problems）
-   - **新 issue B**：GIF MIME 移除（独立，小补丁）
-   - **002**（已存在 ready-for-agent）：SSE 流式实现
-   - **001**（已 shiped）：upload + read
+| 项 | 状态 | GitHub | 说明 |
+|---|---|---|---|
+| 001 — Slice 1: 上传 + 读状态 + 读图 | ✅ shipped | [#3](https://github.com/ppo279/mysdd/issues/3) | 关联 ADR-0005 + ADR-0006 |
+| 002 — Slice 2: 求解 + SSE 流 | 🟡 ready-for-agent | [#4](https://github.com/ppo279/mysdd/issues/4) | 关联 ADR-0004 |
+| 003 — Phase 2 backlog | 🟡 4/5 done | [#5](https://github.com/ppo279/mysdd/issues/5) | #4（@Global 决策）gated by Children |
+| D4 — GIF MIME 移除 | ✅ 已合入 | [#7](https://github.com/ppo279/mysdd/issues/7)（已 close） | 11 处改动，46/46 e2e 全过 |
+| D9 — Auth 信封化 | ❌ 已撤销 | [#7](https://github.com/ppo279/mysdd/issues/7) comment | 已有全局 `WrapResponseInterceptor`，无需改动 |
+| Janitor cron 框架 + 双 job | 🟡 ready-for-agent | [#9](https://github.com/ppo279/mysdd/issues/9) | 整合 solving 卡死 sweeper + orphan file 清理；引用 ADR-0004/0006 |
+
+### 已完成无需再动
+
+- ✅ ADR-0004（异步 SSE AI 求解）、ADR-0005（IDOR 404 统一）、ADR-0006（Storage 接口 + 本地实现）—— 已写、已引用到对应 issue
+- ✅ `/to-prd` → 父 PRD 已 ship，D4/D9 已处理
+- ✅ `/to-issues` → 001/002/003/009 均已发布、标注、关联 ADR
 
 ---
 

@@ -6,6 +6,7 @@ import { WrapResponseInterceptor } from './common/interceptors/wrap-response.int
 import { AuthModule } from './auth/auth.module';
 import { HealthController } from './health.controller';
 import { AnthropicModule } from './integrations/anthropic/anthropic.module';
+import { JanitorModule } from './janitor/janitor.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { ProblemsModule } from './problems/problems.module';
 import { StorageModule } from './storage/storage.module';
@@ -20,6 +21,10 @@ import { StorageModule } from './storage/storage.module';
     // inject their tokens without re-importing.
     StorageModule,
     AnthropicModule,
+    // Janitor cron (issue 009). `@Global()` itself; registered once
+    // here. Background sweep starts on `OnModuleInit` — see
+    // `JanitorService` for the interval + first-tick semantics.
+    JanitorModule,
     ProblemsModule,
   ],
   controllers: [HealthController],
