@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Global, Module } from '@nestjs/common';
 import { LocalDiskStorageService } from './local-disk-storage.service';
 import { STORAGE_SERVICE } from './storage.tokens';
 
@@ -14,10 +14,15 @@ export { STORAGE_SERVICE } from './storage.tokens';
 /**
  * StorageModule.
  *
- * NOT `@Global()` — Phase 1 has exactly one consumer (`ProblemsModule`).
- * Phase 2 backlog says: "promote to @Global() when a second consumer
- * appears" (see `docs/prd/problems.md` §"Deferred Items").
+ * `@Global()` since 2026-06-29 (overrides backlog item #4 in
+ * `docs/issues/003-problems-phase-2-backlog.md`, which originally
+ * gated this on "a second consumer appears"). Lifted early on user
+ * request so future modules (e.g. `ChildrenModule`) can inject
+ * `STORAGE_SERVICE` without re-importing this module.
+ *
+ * Registered once at the root in `AppModule`.
  */
+@Global()
 @Module({
   providers: [
     LocalDiskStorageService,

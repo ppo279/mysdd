@@ -31,11 +31,11 @@ Problems PRD 里被刻意推迟的 5 项打包成单一积压条目。原始 iss
   - **Controller 简化**：`src/problems/problems.controller.ts` 删了原本 ~40 行 inline 配置，改为 `import { multerErrorToMessage, problemImageMulterOptions } from './upload/multer-options'`。
   - **回归**：24/24 problems e2e 全过，#1-#7 #9 #12 零回归。
 
-- [ ] **`AnthropicModule` / `StorageModule` 升级 `@Global()`**（**未做**——保持阻塞）：
-  - **阻塞理由**：PRD 与原 issue 都明确"等出现第二个 consumer 再升"。当前 PoC 阶段没有任何第二模块（`ChildrenModule` 还没建）。在没有真实需求时升 `@Global()` 会让 DI 表面"看起来什么都能用"，掩盖了模块边界。
-  - **当前状态**：`src/integrations/anthropic/anthropic.module.ts` 和 `src/storage/storage.module.ts` 注释里都明确写了 `NOT @Global()` 并指向本 issue。
-  - **解锁条件**：`ChildrenModule` 落地，且**真的**需要调 LLM 或 Storage（不是 "可能需要"）。
-  - **改动量**：一行 `@Global()` + 在 `AppModule` 改 import 顺序。
+- [x] **`AnthropicModule` / `StorageModule` 升级 `@Global()`**（2026-06-29 落地——**用户显式 override 阻塞**）：
+  - **改动**：`src/integrations/anthropic/anthropic.module.ts` 和 `src/storage/storage.module.ts` 都加了 `@Global()` 装饰器；`AnthropicModule` 从 `ProblemsModule.imports` 上移到 `AppModule.imports`（与 `StorageModule` 同列）；`ProblemsModule` 同步删掉两个已变冗余的 import + 更新模块组合注释。
+  - **Override 理由**：用户在 2026-06-29 明确决定不等第二个 consumer 就升，理由不在 backlog 里记录，由 commit message 承载。
+  - **保留风险**：DI 表面看起来"什么都能用"，掩盖模块边界——但模块边界现在由"`StorageService` 接口 + `ANTHROPIC_CLIENT` token"显式表达（业务代码 inject token，不 inject 具体 class），所以即使 DI 表面"宽松"，类型边界依然清晰。
+  - **回归**：跑 `pnpm test`（unit）+ `pnpm test:e2e`（problems + auth）——见 commit 时实测结果。
 
 - [x] **`grade → teaching language` 分级映射表**（2026-06-29 落地）：
   - **三档 + fallback**：`buildSystemPrompt(grade)` 重写为 `primary (1-6)` / `middle (7-12)` / `higher (13+)` / `default (越界)` 四档，每档有自己的 system prompt 模板。带 `【小学阶段】` / `【中学阶段】` / `【高阶阶段】` / `【默认】` marker，方便测试 grep。

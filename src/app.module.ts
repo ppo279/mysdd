@@ -5,6 +5,7 @@ import { TraceIdMiddleware } from './common/middleware/trace-id.middleware';
 import { WrapResponseInterceptor } from './common/interceptors/wrap-response.interceptor';
 import { AuthModule } from './auth/auth.module';
 import { HealthController } from './health.controller';
+import { AnthropicModule } from './integrations/anthropic/anthropic.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { ProblemsModule } from './problems/problems.module';
 import { StorageModule } from './storage/storage.module';
@@ -14,7 +15,11 @@ import { StorageModule } from './storage/storage.module';
     ConfigModule.forRoot({ isGlobal: true }),
     PrismaModule,
     AuthModule,
+    // Both lifted to `@Global()` on 2026-06-29 (issue 003/4).
+    // Imported once here for global registration; feature modules can
+    // inject their tokens without re-importing.
     StorageModule,
+    AnthropicModule,
     ProblemsModule,
   ],
   controllers: [HealthController],

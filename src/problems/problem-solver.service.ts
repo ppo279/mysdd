@@ -276,9 +276,7 @@ export class ProblemSolverService {
    * here by spec. Returns `image/png` as a defensive fallback for
    * unexpected extensions.
    */
-  private mimeFromKey(
-    key: string,
-  ): 'image/jpeg' | 'image/png' | 'image/webp' {
+  private mimeFromKey(key: string): 'image/jpeg' | 'image/png' | 'image/webp' {
     const lower = key.toLowerCase();
     if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
     if (lower.endsWith('.png')) return 'image/png';

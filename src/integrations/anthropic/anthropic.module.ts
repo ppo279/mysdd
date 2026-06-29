@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Global, Module } from '@nestjs/common';
 import { AnthropicClientProvider } from './anthropic.provider';
 import { ANTHROPIC_CLIENT } from './anthropic.tokens';
 
@@ -6,10 +6,10 @@ import { ANTHROPIC_CLIENT } from './anthropic.tokens';
  * AnthropicModule — binds the real `AnthropicClientProvider` to the
  * `ANTHROPIC_CLIENT` DI token.
  *
- * NOT `@Global()`. Phase 1 has exactly one consumer (`ProblemsModule`).
- * Phase 2 backlog says: "promote to @Global() when a second consumer
- * appears" (see `docs/prd/problems.md` §"Deferred Items"). Mirrors the
- * decision on `StorageModule`.
+ * `@Global()` since 2026-06-29 (overrides backlog item #4 in
+ * `docs/issues/003-problems-phase-2-backlog.md`, which originally
+ * gated this on "a second consumer appears"). Lifted early on user
+ * request, mirroring the lift on `StorageModule`.
  *
  * `ConfigModule` is already `@Global()` (set in `app.module.ts`), so we
  * don't need to re-import it here.
@@ -20,6 +20,7 @@ import { ANTHROPIC_CLIENT } from './anthropic.tokens';
  * never reach the solver (e.g. the auth-only e2e suite) don't trip
  * the env requirement.
  */
+@Global()
 @Module({
   providers: [
     AnthropicClientProvider,
