@@ -79,10 +79,13 @@ model Solution {
   createTime DateTime @default(now())
   // 用了哪个大模型
   model String?
-  // token
-  token Int?
-  // 属于一个Problem 
+  // LLM token 使用量 (Anthropic SDK finalMessage().usage 全量 JSON)
+  // 字段名 'token' 已废 — 实际只存 output_tokens 一数字, 误导读者以为是
+  // input/output/total 中任一总称; 改 'usage' 后字段名 + 形状都对齐 SDK
+  // 见 CONTEXT §Language '解题思路' 条目 (C 锁)
+  usage Json?
+  // 属于一个Problem
   problemId Int
   // 反向关系
   problem  Problem @relation(fields: [problemId], references: [id])
-} 
+}

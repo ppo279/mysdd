@@ -20,6 +20,26 @@
 import type { MessageCreateParamsBase } from '@anthropic-ai/sdk/resources/messages';
 
 /**
+ * Anthropic SDK `finalMessage().usage` shape (verbatim from
+ * `@anthropic-ai/sdk/resources/messages`). Stored on the Solution
+ * row as a JSONB column (`Solution.usage`) and emitted on the SSE
+ * `done` event payload — see CONTEXT §Language '解题思路' (C)+(γ).
+ *
+ * `cache_creation_input_tokens` and `cache_read_input_tokens` are
+ * absent when prompt caching isn't in play; the field types in the
+ * SDK are nullable so consumers should treat them as optional.
+ */
+export interface Usage {
+  input_tokens: number;
+  output_tokens: number;
+  // The real SDK types these as `number | null` (present but null
+  // when prompt caching isn't in play). Match the SDK exactly so
+  // the real Anthropic client satisfies this interface structurally.
+  cache_creation_input_tokens: number | null;
+  cache_read_input_tokens: number | null;
+}
+
+/**
  * The events the solver actually subscribes to. The real SDK's
  * `MessageStream` emits more (`signature`, `citation`, `message`,
  * `contentBlock`, etc.) — we ignore them.
@@ -38,10 +58,12 @@ export interface AnthropicStream {
 
   /**
    * Resolves to the final assembled message after the stream
-   * completes. The solver only reads `usage.output_tokens` from it
-   * for the `token` column on the Solution row.
+   * completes. The solver reads the full `usage` object from it
+   * and stores it verbatim on the Solution row's `usage` JSONB
+   * column. Per (C) lock, no folding — input/cache fields are
+   * preserved end-to-end.
    */
-  finalMessage(): Promise<{ usage: { output_tokens: number } }>;
+  finalMessage(): Promise<{ usage: Usage }>;
 }
 
 /**

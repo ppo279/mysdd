@@ -46,7 +46,7 @@ client GET /problems/:id/stream  (Authorization: Bearer ...)
          │  on('thinking_delta') → sse.emit('reasoning_delta', { text })
          │  on('text_delta')     → sse.emit('content_delta',    { text })
          ├─ $transaction([
-         │    prisma.solution.create({ content, model, token, problemId }),
+         │    prisma.solution.create({ content, model, usage: final.usage, problemId }),
          │    prisma.problem.update({ status: 'done' }),
          │  ])
          ├─ sse.emit('done', { problemId, solutionId, totalTokens })

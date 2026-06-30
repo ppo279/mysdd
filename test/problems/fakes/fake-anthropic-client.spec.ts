@@ -56,12 +56,21 @@ describe('FakeAnthropicClient', () => {
   });
 
   describe('finalMessage', () => {
-    it('resolves with usage.output_tokens when the script ends with {kind:"end"}', async () => {
+    it('resolves with full usage object when the script ends with {kind:"end"}', async () => {
+      // (C) Per the §Language lock, `usage` carries the FULL SDK
+      // shape (input_tokens + output_tokens) so the DB column and
+      // SSE `done` payload can mirror verbatim — no folding to
+      // just output_tokens.
       const fake = new FakeAnthropicClient([{ kind: 'end' }]);
       const stream = fake.messages.stream({} as never);
       stream.on('end', () => {});
       const final = await stream.finalMessage();
-      expect(final.usage.output_tokens).toBe(42);
+      expect(final.usage).toEqual({
+        input_tokens: 100,
+        output_tokens: 42,
+        cache_creation_input_tokens: null,
+        cache_read_input_tokens: null,
+      });
     });
 
     it('rejects with the scripted error when the script hits {kind:"error"}', async () => {

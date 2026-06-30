@@ -29,7 +29,11 @@ export interface SolutionView {
   id: number;
   content: string;
   model: string | null;
-  token: number | null;
+  // (C) Full SDK `finalMessage().usage` JSON object, not just
+  // output_tokens. Field type is `unknown` because the exact shape
+  // (cache_creation_input_tokens etc.) is owned by the Anthropic SDK,
+  // not us — consumers should narrow per Anthropic's `Usage` type.
+  usage: unknown;
   createTime: Date;
 }
 
@@ -162,7 +166,8 @@ export class ProblemsService {
             id: true,
             content: true,
             model: true,
-            token: true,
+            // (C) Full SDK usage JSON, not just output_tokens.
+            usage: true,
             createTime: true,
           },
         },
@@ -184,7 +189,7 @@ export class ProblemsService {
             id: problem.solutions[0].id,
             content: problem.solutions[0].content,
             model: problem.solutions[0].model,
-            token: problem.solutions[0].token,
+            usage: problem.solutions[0].usage,
             createTime: problem.solutions[0].createTime,
           }
         : null,

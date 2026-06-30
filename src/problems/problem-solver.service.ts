@@ -160,7 +160,12 @@ export class ProblemSolverService {
     // reasoning is SSE-only and never persisted. Only the answer
     // text goes into the Solution row.
     let answerText = '';
+    // (C) usage holds the full SDK `finalMessage().usage` object;
+    // emitted on the SSE `done` event in (γ) follow-up commit.
+    // `totalTokens` (a derived number) is kept here for the
+    // intermediate state — (γ) will replace it.
     let totalTokens: number | null = null;
+    let usage: import('../integrations/anthropic/anthropic-client').Usage | null = null;
 
     try {
       // 5. Open the stream. The SDK's `.on('text')` and
@@ -205,10 +210,13 @@ export class ProblemSolverService {
       });
 
       // 7. Wait for the stream to finish. `finalMessage()` resolves
-      //    with the assembled message object — we use it only to read
-      //    `usage.output_tokens` for the bookkeeping field.
+      //    with the assembled message object — we capture the FULL
+      //    `usage` object per (C) lock (no folding to just
+      //    output_tokens). (γ) follow-up commit will plumb it to
+      //    the SSE `done` event payload.
       const final = await stream.finalMessage();
       totalTokens = final.usage.output_tokens;
+      usage = final.usage;
 
       // 8. Commit the result. One short transaction — we never hold
       //    a DB transaction across a 180s AI call.
@@ -218,7 +226,8 @@ export class ProblemSolverService {
             problemId,
             content: answerText,
             model: MODEL_ID,
-            token: totalTokens,
+            // (C) Solution.usage is the full SDK usage JSON object.
+            usage: usage as object,
           },
           select: { id: true },
         });

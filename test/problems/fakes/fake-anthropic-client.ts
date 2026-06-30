@@ -2,6 +2,7 @@ import type {
   AnthropicClient,
   AnthropicMessages,
   AnthropicStream,
+  Usage,
 } from '../../../src/integrations/anthropic/anthropic-client';
 import type { MessageCreateParamsBase } from '@anthropic-ai/sdk/resources/messages';
 
@@ -85,6 +86,25 @@ export function defaultSuccessEvents(): FakeEvent[] {
 }
 
 /**
+ * Default `usage` object returned from `finalMessage()`. Mirrors the
+ * Anthropic SDK's shape so the fake's `usage` field is structurally
+ * identical to what the real SDK would emit — important for (C)
+ * lock tests that assert on `Solution.usage` shape end-to-end.
+ *
+ * `cache_creation_input_tokens` / `cache_read_input_tokens` are
+ * absent by default (prompt caching isn't in play in the default
+ * fake flow); tests that exercise caching pass them explicitly.
+ */
+export function defaultUsage(outputTokens = 42): Usage {
+  return {
+    input_tokens: 100,
+    output_tokens: outputTokens,
+    cache_creation_input_tokens: null,
+    cache_read_input_tokens: null,
+  };
+}
+
+/**
  * Stream-shaped object that emits the scripted events asynchronously.
  *
  * Listeners register via `.on('thinking' | 'text' | 'error' | 'end', fn)`
@@ -102,9 +122,9 @@ class FakeAnthropicStream implements AnthropicStream {
 
   private thinkingSnapshot = '';
   private textSnapshot = '';
-  private finalResolve?: (value: { usage: { output_tokens: number } }) => void;
+  private finalResolve?: (value: { usage: Usage }) => void;
   private finalReject?: (err: unknown) => void;
-  private finalPromise: Promise<{ usage: { output_tokens: number } }>;
+  private finalPromise: Promise<{ usage: Usage }>;
   private started = false;
 
   constructor(private readonly events: FakeEvent[]) {
@@ -148,7 +168,7 @@ class FakeAnthropicStream implements AnthropicStream {
     return this;
   }
 
-  finalMessage(): Promise<{ usage: { output_tokens: number } }> {
+  finalMessage(): Promise<{ usage: Usage }> {
     this.maybeStart();
     return this.finalPromise;
   }
@@ -182,7 +202,7 @@ class FakeAnthropicStream implements AnthropicStream {
         }
         case 'end': {
           for (const fn of this.listeners.end) fn();
-          this.finalResolve?.({ usage: { output_tokens: 42 } });
+          this.finalResolve?.({ usage: defaultUsage() });
           return;
         }
         case 'error': {
@@ -196,6 +216,6 @@ class FakeAnthropicStream implements AnthropicStream {
     // Script ended without an explicit 'end' or 'error' — close out
     // gracefully so callers awaiting finalMessage() don't hang.
     for (const fn of this.listeners.end) fn();
-    this.finalResolve?.({ usage: { output_tokens: 0 } });
+    this.finalResolve?.({ usage: defaultUsage(0) });
   }
 }
