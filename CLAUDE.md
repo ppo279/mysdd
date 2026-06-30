@@ -80,7 +80,7 @@ pnpm start:prod              # node dist/main
 | `Child` | id, name, grade, userId → User | 孩子档案 |
 | `Problem` | id, imageUrl, ocrText?, status (EnumStatus), childId → Child | 题目 + OCR 状态机 |
 | `Solution` | id, content, model?, token?, problemId → Problem | LLM 生成的解题思路 |
-| `EnumStatus` | pending / ocr_processing / ocr_done / solving / done / failed | Problem 的处理流水线状态 |
+| `EnumStatus` | pending / solving / done / failed | Problem 的处理流水线状态（OCR 阶段已取消；zombie 值 `ocr_processing` / `ocr_done` 由 004 迁移 enum rebuild 移除） |
 
 **字段名拼写注意**：模型叫 `Child`（不是 `Chile`），关联字段叫 `children`（不是 `childs`）—— 这俩名字都容易写错，schema 里已修正。
 

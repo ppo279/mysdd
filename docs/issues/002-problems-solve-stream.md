@@ -8,6 +8,7 @@ blocked_by: [001-problems-upload-read-image]
 covers_user_stories: [11, 12, 13, 14, 15, 16, 17, 18, 22, 23, 24, 27, 29, 30]
 covers_e2e_cases: [10, 11]
 created: 2026-06-26
+github_issue: 4
 ---
 
 ## What to build

@@ -195,7 +195,7 @@ interface StorageService {
 
 ### Schema decisions
 
-- **No schema migration.** `ocrText` column is kept, marked `@deprecated` (OCR-era artifact, never written or read). All six `EnumStatus` values retained; code uses only `pending`, `solving`, `done`, `failed`. `ocr_processing` and `ocr_done` remain as zombies in case OCR is ever revived. PG ENUM does not support DROP VALUE, so we don't try.
+- **No schema migration for the `ocrText` column.** It is kept, marked `@deprecated` (OCR-era artifact, never written or read). `EnumStatus` was once 6 values but the two zombies (`ocr_processing`, `ocr_done`) have since been removed by a follow-up migration (`20260630120000_drop_enum_status_ocr_zombies`, rename → new → alter → drop) since the code never touched them and PG ENUM does not support `DROP VALUE`. The current schema and DB have exactly 4 values: `pending` / `solving` / `done` / `failed`. The invariant is locked by `test/schema/enum-status.e2e-spec.ts`.
 
 ### API contracts
 
@@ -427,7 +427,7 @@ The rollback case (#8) requires overriding `PrismaService` to throw, which is me
 
 - **Reasoning text is intentionally not persisted.** Storing it would add a large nullable column to every problem and force every reader to decide whether to include it. The stream is the only delivery channel for PoC.
 
-- **The two zombie enum values (`ocr_processing`, `ocr_done`)** are documented in the schema with comments. Future migrations to clean them up would require a PG ENUM rebuild (rename → new type → alter column → drop old type), which is doable but not worth the complexity at PoC.
+- **The two zombie enum values (`ocr_processing`, `ocr_done`)** have been removed by a follow-up migration (`20260630120000_drop_enum_status_ocr_zombies`, rename → new type → alter column → drop old type) once it became clear they were never going to be revived.
 
 - **The `POST /problems` flow is idempotent at the upload level only.** Submitting the same image twice produces two distinct `Problem` rows. True idempotency (a request id) is out of scope.
 

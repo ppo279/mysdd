@@ -9,6 +9,7 @@ covers_user_stories: []
 covers_e2e_cases: [8, 11d]
 created: 2026-06-26
 last_updated: 2026-06-29
+github_issue: 5
 ---
 
 ## Purpose

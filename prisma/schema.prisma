@@ -12,10 +12,13 @@ datasource db {
 }
 
 
+// 004: EnumStatus was previously 6 values; `ocr_processing` and
+// `ocr_done` were OCR-era zombies (CONTEXT §1.1, MiniMax-M3 直接吃图，
+// 无 OCR 阶段). They were removed via enum rebuild migration
+// `20260630120000_drop_enum_status_ocr_zombies` (rename → new →
+// alter → drop). Code uses only these 4 valid states.
 enum EnumStatus {
   pending
-  ocr_processing
-  ocr_done
   solving
   done
   failed

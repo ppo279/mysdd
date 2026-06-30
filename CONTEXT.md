@@ -12,7 +12,7 @@
 |---|---|---|
 | Auth | ✅ shipped | `register / login / me`，16 项 e2e 全过 |
 | Prisma | ✅ shipped | User/Child/Problem/Solution 四表；`Child.grade` 1–12 CHECK 已加（003 #2） |
-| Children | 🟡 DTO only | `src/children/dto/create-child.dto.ts` 已写但**未接路由**；独立 PRD |
+| Children | ✅ shipped | 4 端点已上线（commit `11f4967`） |
 | Problems | 🟡 PRD shiped + grill | 父 PRD 已发布；`001` slice 1（upload）已 shiped；`002` slice 2（SSE）ready-for-agent；`003` phase 2 backlog 4/5 完成 |
 
 ---
@@ -21,7 +21,7 @@
 
 ### 1.1 `MiniMax-M3` 是多模态，**没有 OCR 阶段**
 
-父 PRD 第 137–141 行、第 396–398 行明确：OCR pipeline 显式取消。`MiniMax-M3` 直接吃图 + 出解题思路。`ocrText` 列**保留但 `@deprecated`**（PG ENUM 不支持 drop value，所以 `ocr_processing`/`ocr_done` 仍是 zombie enum 值）。
+父 PRD 第 137–141 行、第 396–398 行明确：OCR pipeline 显式取消。`MiniMax-M3` 直接吃图 + 出解题思路。`ocrText` 列**保留但 `@deprecated`**。`EnumStatus` 早期含 6 值，zombie 值 `ocr_processing` / `ocr_done` 已由迁移 `20260630120000_drop_enum_status_ocr_zombies`（rename → new → alter → drop）清掉；现 schema 与 DB 均为 4 值：`pending` / `solving` / `done` / `failed`。`test/schema/enum-status.e2e-spec.ts` 锁住这条不变量。
 
 > **任何"加 OCR 阶段"的提议都先回到 PRD 改 design**，不在 CONTEXT 层面决策。
 
@@ -40,7 +40,7 @@
 | `imageUrl` 暴露形式 | API 路径 `/problems/${id}/image`（**不**是 DB 列里的 storage key） | PRD 第 178 行 |
 | IDOR miss | 统一 404 `child 不存在` / `problem 不存在`（不复用 403，避免枚举） | PRD 第 209/217 行 |
 | 存储抽象 | `StorageService` 接口 + `LocalDiskStorageService` 实现 | PRD 第 149–157 行 |
-| `@Global()` 决策 | `StorageModule` / `AnthropicModule` **都**保持非全局，等 Children 落地后再说（003 #4 阻塞中） | `001/002` issue + 003 backlog |
+| `@Global()` 决策 | `StorageModule` / `AnthropicModule` 已升 `@Global()`（commit `03873cb`，JanitorModule 是第二个 consumer） | `001/002` issue + 003 backlog |
 
 ---
 
@@ -162,7 +162,7 @@ G3 ───→ Q8 子补丁；触发新 issue（auth 信封化）
 |---|---|---|---|
 | 001 — Slice 1: 上传 + 读状态 + 读图 | ✅ shipped | [#3](https://github.com/ppo279/mysdd/issues/3) | 关联 ADR-0005 + ADR-0006 |
 | 002 — Slice 2: 求解 + SSE 流 | 🟡 ready-for-agent | [#4](https://github.com/ppo279/mysdd/issues/4) | 关联 ADR-0004 |
-| 003 — Phase 2 backlog | 🟡 4/5 done | [#5](https://github.com/ppo279/mysdd/issues/5) | #4（@Global 决策）gated by Children |
+| 003 — Phase 2 backlog | ✅ 5/5 done | [#5](https://github.com/ppo279/mysdd/issues/5) | #4（@Global 决策）已升格（commit `03873cb`） || Children Module CRUD | ✅ shipped | — | 关联 ADR-0004/0005/0006（commit `11f4967`） |
 | D4 — GIF MIME 移除 | ✅ 已合入 | [#7](https://github.com/ppo279/mysdd/issues/7)（已 close） | 11 处改动，46/46 e2e 全过 |
 | D9 — Auth 信封化 | ❌ 已撤销 | [#7](https://github.com/ppo279/mysdd/issues/7) comment | 已有全局 `WrapResponseInterceptor`，无需改动 |
 | Janitor cron 框架 + 双 job | 🟡 ready-for-agent | [#9](https://github.com/ppo279/mysdd/issues/9) | 整合 solving 卡死 sweeper + orphan file 清理；引用 ADR-0004/0006 |
@@ -178,8 +178,6 @@ G3 ───→ Q8 子补丁；触发新 issue（auth 信封化）
 ## 6. 不要在这里决策的事项
 
 - ❌ 是否升级 OSS / S3（003 backlog 范围，不动）
-- ❌ `@Global()` StorageModule / AnthropicModule（003 #4 阻塞，等 Children 落地）
-- ❌ ChildrenModule CRUD（独立 PRD）
 - ❌ `Last-Event-ID` SSE 重连重放（PRD 第 406 行明确不做）
 - ❌ `Problem.reasoning` 持久化列（同上）
 - ❌ 多图上传（一图 = 一题，PRD 第 402 行）

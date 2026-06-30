@@ -144,9 +144,14 @@ describe('ChildrenService', () => {
     });
     // The findFirst filter is `id + userId` — collapsing "not there"
     // and "not yours" into one null result is the IDOR-safe pattern.
+    // `getOne` delegates to `assertOwnedByUser` (a cheap `select: { id: true }`
+    // probe) BEFORE re-fetching with the full projection, so when the probe
+    // returns null the second findFirst never runs. We therefore assert the
+    // shape of the probe call only; the full-select call is exercised by the
+    // happy-path test below.
     expect(childFindFirst).toHaveBeenCalledWith({
       where: { id: 999, userId: 42 },
-      select: { id: true, name: true, grade: true, createTime: true },
+      select: { id: true },
     });
   });
 

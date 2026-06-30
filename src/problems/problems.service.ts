@@ -177,7 +177,7 @@ export class ProblemsService {
       id: problem.id,
       childId: problem.childId,
       imageUrl: apiImagePath(problem.id),
-      status: problem.status as ProblemView['status'],
+      status: problem.status,
       createTime: problem.createTime,
       solution: problem.solutions[0]
         ? {
@@ -220,7 +220,7 @@ export class ProblemsService {
     }
     return {
       id: problem.id,
-      status: problem.status as 'pending' | 'solving' | 'done' | 'failed',
+      status: problem.status,
     };
   }
 

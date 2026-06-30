@@ -76,16 +76,22 @@ export class ChildrenService {
    * Read a single child. Throws `NotFoundException('child 不存在')`
    * for both "doesn't exist anywhere" and "exists but not yours"
    * (IDOR-safe: anti-enumeration).
+   *
+   * Goes through `assertOwnedByUser` first (cheap `select: { id: true }`)
+   * and then re-fetches with the full projection. This mirrors the
+   * spec's "re-fetch with the full select after the assertion"
+   * pattern and keeps the IDOR check in one place.
    */
   async getOne(userId: number, childId: number): Promise<ChildView> {
+    await this.assertOwnedByUser(userId, childId);
     const child = await this.prisma.child.findFirst({
       where: { id: childId, userId },
       select: { id: true, name: true, grade: true, createTime: true },
     });
-    if (!child) {
-      throw new NotFoundException('child 不存在');
-    }
-    return child;
+    // assertOwnedByUser just confirmed existence; the second findFirst
+    // uses the same where-clause so this should never be null. The
+    // non-null assertion is for the type narrowing.
+    return child!;
   }
 
   /**

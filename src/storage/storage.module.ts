@@ -17,7 +17,7 @@ export { STORAGE_SERVICE } from './storage.tokens';
  * `@Global()` since 2026-06-29 (overrides backlog item #4 in
  * `docs/issues/003-problems-phase-2-backlog.md`, which originally
  * gated this on "a second consumer appears"). Lifted early on user
- * request so future modules (e.g. `ChildrenModule`) can inject
+ * request so future modules (e.g. `JanitorModule`) can inject
  * `STORAGE_SERVICE` without re-importing this module.
  *
  * Registered once at the root in `AppModule`.
