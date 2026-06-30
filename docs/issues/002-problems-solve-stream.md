@@ -10,6 +10,25 @@ covers_e2e_cases: [10, 11]
 created: 2026-06-26
 shipped_commit: a7b6990
 last_updated: 2026-06-30
+amendments:
+  - commit: 6e88a7a
+    lock: (β)
+    summary: failed-image returns 200 + X-AI-Status: failed header (always serve the image even if AI failed)
+  - commit: 41db634
+    lock: (C)
+    summary: Solution.token → Solution.usage JSONB (full SDK finalMessage().usage, not just output_tokens)
+  - commit: 8810bf7
+    lock: (γ)
+    summary: SSE done payload = usage JSON (1:1 mirror of DB Solution.usage)
+  - commit: 31568f8
+    lock: (Q6)
+    summary: SSE first frame = real status (pending|solving|done|failed), dropped 'already_processing' fold
+  - commit: eff5e12
+    lock: (A)
+    summary: Problem.solution 1:0..1 singleton (UNIQUE on Solution.problemId)
+  - commit: bde4349
+    lock: (Q7)
+    summary: Problem.failureCode (EnumFailureCode, 5 values) + Problem.failureReason; SSE error payload {message, code, reason}
 github_issue: 4
 ---
 
@@ -171,3 +190,4 @@ SOLVER_MAX_TOKENS=8192               # answer token ceiling; thinking is separat
 ## Amendment log
 
 - **2026-06-30**：shipped. Commit `a7b6990 feat(problems): solve + SSE stream (issue 002)`. Acceptance criteria all checked (24/24 problems e2e + 15/15 auth regression, lint 0 errors, build clean). Frontmatter status sync (`open` → `shipped`) per housekeeping pass.
+- **2026-06-30**：(β) / (C) / (γ) / (Q6) / (A) / (Q7) six follow-up commits, each locked to a §Language entry. Total problems e2e 25/25, auth 15/15, unit 41/41 after all amendments. See frontmatter `amendments[]` for commit-by-commit breakdown. CLAUDE.md "Problems 实现" section reflects the post-amendment schema and SSE contract.

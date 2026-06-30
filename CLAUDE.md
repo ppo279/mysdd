@@ -254,7 +254,9 @@ throw new UnauthorizedException('邮箱或密码错误');
 
 ## 尚未完成的工作
 
-- ❌ **业务模块仍空**：除 `AuthModule` 外没有其他业务路由（无 child/problem/solution CRUD）。
+- ⚠️ **PoC chain immutable**：per (Q9) `DELETE /users/me` + `DELETE /children/:id` (post-Problem) + `DELETE /problems/:id` **不实现**。PoC 阶段 User → Child → Problem → Solution 链事实不可删。GDPR right-to-delete 推 future slice（一次性 cascade Job，不走 Janitor cron 框架）。
+- ⚠️ **Child.grade `@db.SmallInt`**：`prisma/schema.prisma` 里 `Child.grade` 仍是 `Int`（4 字节）。逻辑范围 1..12（DB CHECK 已就位），物理上 `SmallInt`（2 字节）就够。属于 cosmetic，下次 migration 顺手改。
+- ⚠️ **Children CRUD 文档**：`docs/issues/004-children-doc-drift.md` shipped，但 `CLAUDE.md` 上方"数据模型"表里 `Child.grade` 字段没把 `1..12` CHECK 写进去；下次更新时补。
 
 ## 已完成
 
@@ -262,6 +264,11 @@ throw new UnauthorizedException('邮箱或密码错误');
 - ✅ 首份 Prisma 迁移 `20260625075017_init` 已 apply，User/Child/Problem/Solution 四张表已建
 - ✅ Nest 启动验证通过（PrismaService 用 `@prisma/adapter-pg` 适配器模式连上 PG）
 - ✅ **Auth 实现**：`register` + `login` + `me` 三个端点全过，e2e 16 项全绿。详见下文「Auth 实现」。
+- ✅ **Children 实现**（commit `11f4967`）：`POST /children` + `GET /children` + `GET /children/:id` + `PUT /children/:id` + `DELETE /children/:id` 五个端点。`Child.grade` 1..12 DB CHECK + DTO `@Min/@Max` 镜像已就位。
+- ✅ **Problems 实现（issue 001 + 002 + 6 个 follow-up 锁）**：`POST /problems` (image upload) + `GET /problems/:id` (含 solution 兜底) + `GET /problems/:id/image` + `GET /problems/:id/stream`（SSE，异步 + Anthropic SDK `MiniMax-M3` 流式调用）四个端点。e2e 25/25，build clean。详见下文「Problems 实现」。
+- ✅ **Phase 2 Janitor cron**（issue 009）：commits `25394bd` + `03873cb` — `solving` 卡死行 sweeper。
+
+## Auth 实现（已落地）
 
 ## Auth 实现（已落地）
 
@@ -356,7 +363,91 @@ new ValidationPipe({
 
 > **一个原本想加但跑不通的测试**：`jest.spyOn(bcrypt, 'compare')` 试图验证 not-found 路径"真的调了 bcrypt.compare"——失败抛 `TypeError: Cannot redefine property: compare`，因为 `bcrypt` 是 native 模块，导出属性 non-configurable。改用 wall-clock 时间做粗略回归（见 #10）。真要"严格"验证，应该把 `bcrypt` 抽成 Nest provider 注入——目前没做。
 
-## 关键文件路径
+## Problems 实现（已落地）
+
+四个端点，e2e 25/25（regression: auth 15/15 + unit 41/41）。
+
+### 端点速查
+
+| 方法 | 路径 | 入参 | 成功 | 失败 |
+|---|---|---|---|---|
+| POST | `/problems` | multipart: `childId` + `image` (JPEG/PNG/WEBP, ≤10MB) | 201 `{id, childId, imageUrl: '/problems/:id/image', status: 'pending', solution: null, failureCode: null, failureReason: null}` | 400 / 404 / 500 |
+| GET | `/problems/:id` | path: id | 200 `{...同上, solution?, failureCode?, failureReason?}` | 404 |
+| GET | `/problems/:id/image` | path: id | 200 `Content-Type: image/...`（失败行额外带 `X-AI-Status: failed`） | 404 |
+| GET | `/problems/:id/stream` | path: id, `Accept: text/event-stream` | 200 SSE，5 事件 schema 见下 | 401 / 404 |
+
+### SSE 事件 schema（locked，详见 `docs/adr/0004` + `docs/issues/002`）
+
+| event | payload | 含义 |
+|---|---|---|
+| `status` | `{status: 'pending' \| 'solving' \| 'done' \| 'failed'}` | 第一帧；late-arrival 也透传真实状态（(Q6) 锁） |
+| `reasoning_delta` | `{text: string}` | AI 思考过程，零或多条，**不持久化**（SSE-only） |
+| `content_delta` | `{text: string}` | AI 答案文本，零或多条 |
+| `done` | `{problemId, solutionId, usage}` | `usage` 是 SDK `finalMessage().usage` 全量 JSON，与 DB `Solution.usage` 1:1 mirror（(γ) 锁） |
+| `error` | `{message, code, reason}` | `code` ∈ `EnumFailureCode`，`reason` 是底层异常 message（(Q7) 锁） |
+
+15 秒心跳 `: keep-alive\n\n`；180 秒硬超时 `AbortController` 套 SDK 流。
+
+### §Language 9 决 → 实施落地映射（依次按 commit 落地）
+
+| 锁 | §Language 决 | 实施 commit | 实施要点 |
+|---|---|---|---|
+| (A) | Problem=event 不是 asset | `11f4967` (slice 1) + `eff5e12` (1:0..1) | `Problem` 行可重建（不存图像本身，只存 `imageUrl` storage key）；`Solution` 用 `problemId @unique` 约束 1:0..1 单例 |
+| (β) | failed-image 200 + X-AI-Status | `6e88a7a` | `GET /problems/:id/image` 永远 200（除非空）；`status === 'failed'` 时附加 `X-AI-Status: failed` header；不区分"AI 失败"和"图像损坏" |
+| (C) | `Solution.usage` = SDK JSON 全量 | `41db634` | `token Int?` → `usage Json?`；Prisma 边界用 `as unknown as Prisma.InputJsonValue` cast（SDK-faithful `Usage` interface 故意不携带 index signature） |
+| (γ) | SSE done payload = usage JSON | `8810bf7` | `SseEventPayload.done` 用 `usage: Usage` 替代 `totalTokens: number \| null`；solver emit `final.usage` 直接透传 |
+| (Q5) | Problem=event（与 (A) 同向强化） | 与 (A) 同 commit | `Problem` 不引用具体图像字节，只引用 `imageUrl`；图像本身在 storage |
+| (Q6) | SSE 首帧 = 真实 status，不 fold `already_processing` | `31568f8` | `claimed.count === 0` 分支改成 `findUnique({ select: { status } })` + emit 真实 status；`SseEventPayload.status` union 去掉 `'already_processing'` |
+| (Q7) | `Problem.failureCode` + `Problem.failureReason` | `bde4349` | 新 enum `EnumFailureCode`（5 值：upload_storage_failed / upload_db_update_failed / image_read_failed / solver_timeout / solver_failed）；`failureReason` 是底层异常 message（截断 2000 字符）；SSE `error` payload 加 `code` + `reason` |
+| (Q8) | `Child.grade` 是 live reference | `4459564` (chore/docs) | DB schema 没有 `Problem.grade` / `Solution.grade` 字段；solver 每次 `findUnique` 拿 `child.grade`（live join） |
+| (Q9) | PoC chain immutable，GDPR 不在此决 | `d11cc57` (chore/docs) | `deleteMany(child)` cascade 不删 `Solution`（PoC 链），**也不删 `Problem.imageUrl` storage 对象**；GDPR right-to-delete 推到 future slice |
+
+### 文件结构
+
+```
+src/problems/
+├── problems.module.ts             ← @Module 注册 controller + service + solver + AnthropicModule
+├── problems.controller.ts         ← @Controller('problems') 四个端点；@RawResponse 装饰器 /problems/:id/image 与 stream
+├── problems.service.ts            ← create (multipart upload) / getOne (含 solution + failureCode/Reason) / getImage (含 aiStatus)
+├── problem-solver.service.ts      ← solve() 异步 + SSE 推送；markFailed(code, reason) 5 路径分支
+├── problem-sse-sink.ts            ← SseSink 接口 + SseEventName + SseEventPayload 五事件 union
+├── dto/
+│   └── create-problem.dto.ts      ← childId Int (class-validator)
+└── (无 problems.service.spec.ts — e2e 覆盖)
+
+test/problems/
+├── problems.e2e-spec.ts           ← 25 cases（详见 issue 002 验收清单）
+├── problem-solver.service.spec.ts ← solver 单元（分级 prompt 等）
+├── fakes/
+│   ├── fake-anthropic-client.ts   ← FakeAnthropicClient + FakeAnthropicStream (可控 reject / empty / default 脚本)
+│   └── fake-anthropic-client.spec.ts
+└── helpers/
+    └── consume-sse.ts             ← Node 24 fetch + \n\n split
+```
+
+### 关键约定
+
+| 关注点 | 选择 | 备注 |
+|---|---|---|
+| 图像存储 | `LocalDiskStorageService` (DI via `STORAGE_SERVICE` token) | slice 1 实现；upload 写到 `./uploads/<userId>/<uuid>.<ext>`；删 file = `storage.delete(key)` |
+| 图像读取失败语义 | (β) 锁：永远 200，失败行带 `X-AI-Status: failed` | 即使 AI 失败，原始题目图仍可看（家长对照 AI 解题） |
+| `Problem` 创建顺序 | DB-first：先 insert row（`imageUrl: ''`），再 storage.put，再 update key | 任一步失败 → row markFailed，文件 orphan 由 catch 清理（slice 1 storage.put 失败无 orphan，DB update 失败有 orphan） |
+| Solver 并发锁 | `updateMany({ where: { id, status: 'pending' } })` → `count === 0` 即 lost race | (Q6) 后不抛 `already_processing`，改为透传真实 status |
+| Solver 错误处理 | `try { SDK } catch (err) { markFailed(code, reason); emit error } finally { complete }` | 5 catch 路径分别用 5 个 code |
+| Solver timeout | `AbortController.timeout(SOLVER_TIMEOUT_MS)` | SDK 听 signal 自动 abort；catch 分支用 `err.name === 'AbortError'` 判 timeout |
+| 求解器 ↔ SSE 接口 | `SseSink`（自定义 5-事件 union），solver 不直接接触 Nest `Observable` | 单测用 5 行 in-memory sink，handler 把 sink 翻译成 `MessageEvent` |
+| 错误消息（用户面） | 中文，由 catch 路径决定（timeout / 其他 / image_read） | DB `failureReason` 是英文原始 message（debug 用） |
+
+### Prisma migrations（按时间序）
+
+| 时间戳 | 名字 | 内容 |
+|---|---|---|
+| 20260625075017 | `init` | 4 张表 + EnumStatus |
+| 20260629110000 | `add_child_grade_range_check` | `Child.grade` CHECK `1..12` |
+| 20260630064003 | `solution_usage_json` | `Solution.token` → `Solution.usage JSONB` (C) |
+| 20260630120000 | `drop_enum_status_ocr_zombies` | enum rebuild 去掉 `ocr_processing` / `ocr_done` |
+| 20260630150000 | `solution_one_to_zero_or_one` | `CREATE UNIQUE INDEX Solution_problemId_key` (A) |
+| 20260630160000 | `problem_failure_code` | `EnumFailureCode` (5 值) + `Problem.failureCode` / `failureReason` (Q7) |
 
 | 文件 | 作用 |
 |---|---|
@@ -368,7 +459,11 @@ new ValidationPipe({
 | `src/app.module.ts` | 根模块（`ConfigModule` + `PrismaModule` + `AuthModule`） |
 | `src/main.ts` | bootstrap + 全局 `ValidationPipe` |
 | `src/auth/*` | Auth 模块（DTO + Service + Controller + JwtModule + Guard） |
+| `src/problems/*` | Problems 模块（DTO + Service + Controller + Solver + SseSink + AnthropicModule wiring） |
+| `src/integrations/anthropic/*` | Anthropic SDK 适配（DI via `ANTHROPIC_CLIENT` token） |
+| `src/storage/*` | 本地盘存储（DI via `STORAGE_SERVICE` token；写 + 读 + 删） |
 | `test/auth/auth.e2e-spec.ts` | 16 项 e2e 测试 |
+| `test/problems/problems.e2e-spec.ts` | 25 项 e2e 测试 |
 | `docker-compose.yml` | PG 容器编排 |
 | `db/init/01-extensions.sql` | 首次启动装扩展 |
 | `.env` / `.env.example` | 环境变量（前者 gitignored） |
