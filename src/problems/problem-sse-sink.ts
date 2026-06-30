@@ -29,6 +29,7 @@ export type SseEventName =
   | 'done'
   | 'error';
 
+import type { EnumFailureCode } from '@prisma/client';
 /**
  * The five PRD-locked event payloads. Adding a new event = adding a
  * case here + bumping the solver. The `status` payload has the union
@@ -40,12 +41,18 @@ export type SseEventName =
  * derived number) so the SSE channel and DB `Solution.usage`
  * are 1:1 mirror — clients can do cost analysis from
  * accumulated SSE events without a follow-up GET.
+ *
+ * (Q7) `error` payload now carries `code` (the EnumFailureCode that
+ * classifies the failure path — 1:1 with DB `Problem.failureCode`)
+ * plus `reason` (the underlying exception message — 1:1 with
+ * `Problem.failureReason`). `message` is the user-facing Chinese
+ * string.
  */
 export type SseEventPayload =
   | { status: 'pending' | 'solving' | 'done' | 'failed' }
   | { text: string }
   | { problemId: number; solutionId: number; usage: Usage }
-  | { message: string };
+  | { message: string; code: EnumFailureCode; reason: string };
 
 export interface SseSink {
   /**

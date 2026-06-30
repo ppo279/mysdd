@@ -5,6 +5,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import type { EnumFailureCode } from '@prisma/client';
 import type { Readable } from 'stream';
 import { PrismaService } from '../prisma/prisma.service';
 import { STORAGE_SERVICE } from '../storage/storage.tokens';
@@ -15,6 +16,9 @@ import type { CreateProblemDto } from './dto/create-problem.dto';
  * Shape returned by `create` and `getOne`. The `imageUrl` here is the
  * **API path** (`/problems/${id}/image`) — never the raw storage key
  * stored in `Problem.imageUrl`. The DB column is internal detail.
+ *
+ * (Q7) lock: `failureCode` + `failureReason` classify the failure
+ * path. Both are null when `status !== 'failed'`.
  */
 export interface ProblemView {
   id: number;
@@ -23,6 +27,8 @@ export interface ProblemView {
   status: 'pending' | 'solving' | 'done' | 'failed';
   createTime: Date;
   solution: SolutionView | null;
+  failureCode: EnumFailureCode | null;
+  failureReason: string | null;
 }
 
 export interface SolutionView {
@@ -112,7 +118,11 @@ export class ProblemsService {
     } catch (err) {
       // No file was written (writeFile throws before completing), so no
       // cleanup needed — just mark the row and surface 500.
-      await this.markFailed(problem.id);
+      await this.markFailed(
+        problem.id,
+        'upload_storage_failed',
+        errMessage(err),
+      );
       this.logger.error(
         `storage.put failed for problem ${problem.id} (user ${userId})`,
         err instanceof Error ? err.stack : String(err),
@@ -129,7 +139,11 @@ export class ProblemsService {
     } catch (err) {
       // File IS on disk here — best-effort delete it, then mark row.
       await this.storage.delete(storedKey);
-      await this.markFailed(problem.id);
+      await this.markFailed(
+        problem.id,
+        'upload_db_update_failed',
+        errMessage(err),
+      );
       this.logger.error(
         `DB update with storage key failed for problem ${problem.id}`,
         err instanceof Error ? err.stack : String(err),
@@ -144,6 +158,9 @@ export class ProblemsService {
       status: 'pending',
       createTime: problem.createTime,
       solution: null,
+      // (Q7) lock: not failed, so both classification fields are null.
+      failureCode: null,
+      failureReason: null,
     };
   }
 
@@ -159,6 +176,10 @@ export class ProblemsService {
         childId: true,
         createTime: true,
         status: true,
+        // (Q7) lock: failure classification on `failed` rows. NULL
+        // when status != 'failed' (which is the common case).
+        failureCode: true,
+        failureReason: true,
         // (A) lock: at most one Solution per Problem (1:0..1
         // singleton). Enforced at the storage layer via UNIQUE on
         // Solution.problemId. The Prisma client relation field
@@ -195,6 +216,8 @@ export class ProblemsService {
             createTime: problem.solution.createTime,
           }
         : null,
+      failureCode: problem.failureCode,
+      failureReason: problem.failureReason,
     };
   }
 
@@ -274,14 +297,24 @@ export class ProblemsService {
   }
 
   /**
-   * Mark a problem as `failed`. Best-effort — if even this throws, the
-   * upstream caller already has a 500 to surface.
+   * Mark a problem as `failed` with (Q7) classification.
+   * Best-effort — if even this throws, the upstream caller already
+   * has a 500 to surface. `reason` is the underlying exception
+   * message, truncated to keep DB rows readable.
    */
-  private async markFailed(problemId: number): Promise<void> {
+  private async markFailed(
+    problemId: number,
+    code: EnumFailureCode,
+    reason: string,
+  ): Promise<void> {
     try {
       await this.prisma.problem.update({
         where: { id: problemId },
-        data: { status: 'failed' },
+        data: {
+          status: 'failed',
+          failureCode: code,
+          failureReason: reason.slice(0, 2000),
+        },
       });
     } catch (err) {
       this.logger.error(
@@ -304,4 +337,13 @@ function mimeFromKey(key: string): string {
   if (lower.endsWith('.png')) return 'image/png';
   if (lower.endsWith('.webp')) return 'image/webp';
   return 'application/octet-stream';
+}
+
+/**
+ * Extract a human-readable message from an unknown thrown value.
+ * (Q7) populates `Problem.failureReason` from this — used by every
+ * catch path that calls `markFailed`.
+ */
+function errMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }

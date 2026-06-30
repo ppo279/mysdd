@@ -133,9 +133,13 @@ export class ProblemSolverService {
     if (!problem) {
       // Race: row got deleted between updateMany and findUnique. Mark
       // failed and bail — there's nothing left to solve.
-      await this.markFailed(problemId);
+      await this.markFailed(problemId, 'solver_failed', 'problem row vanished mid-solve');
       sink.emit('status', { status: 'failed' });
-      sink.emit('error', { message: '解题失败，请稍后重试' });
+      sink.emit('error', {
+        message: '解题失败，请稍后重试',
+        code: 'solver_failed',
+        reason: 'problem row vanished mid-solve',
+      });
       sink.complete();
       return;
     }
@@ -150,12 +154,17 @@ export class ProblemSolverService {
       imageBuffer = await streamToBuffer(stream);
       mediaType = this.mimeFromKey(problem.imageUrl);
     } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
       this.logger.error(
-        `image read failed for problem ${problemId}: ${err instanceof Error ? err.message : String(err)}`,
+        `image read failed for problem ${problemId}: ${reason}`,
       );
-      await this.markFailed(problemId);
+      await this.markFailed(problemId, 'image_read_failed', reason);
       sink.emit('status', { status: 'failed' });
-      sink.emit('error', { message: '解题失败，请稍后重试' });
+      sink.emit('error', {
+        message: '解题失败，请稍后重试',
+        code: 'image_read_failed',
+        reason,
+      });
       sink.complete();
       return;
     }
@@ -263,17 +272,22 @@ export class ProblemSolverService {
       // Failure path: translate the throw to a Chinese user-facing
       // message. Distinguish timeout (AbortError) from generic
       // failure (everything else) per PRD §"Error messages (locked)".
+      // (Q7) lock: classify the failure path (solver_timeout vs
+      // solver_failed) and forward code+reason on the SSE error
+      // frame so the client can log / display structured info.
       const isTimeout = err instanceof Error && err.name === 'AbortError';
+      const code = isTimeout ? 'solver_timeout' : 'solver_failed';
+      const reason = err instanceof Error ? err.message : String(err);
       const userMessage = isTimeout
         ? '解题超时，请稍后重试'
         : '解题失败，请稍后重试';
       this.logger.error(
-        `solve failed for problem ${problemId} (timeout=${isTimeout}): ${err instanceof Error ? err.message : String(err)}`,
+        `solve failed for problem ${problemId} (timeout=${isTimeout}): ${reason}`,
         err instanceof Error ? err.stack : undefined,
       );
-      await this.markFailed(problemId);
+      await this.markFailed(problemId, code, reason);
       sink.emit('status', { status: 'failed' });
-      sink.emit('error', { message: userMessage });
+      sink.emit('error', { message: userMessage, code, reason });
     } finally {
       clearTimeout(timer);
       sink.complete();
@@ -281,15 +295,24 @@ export class ProblemSolverService {
   }
 
   /**
-   * Best-effort status update. If even THIS throws, we let the
-   * upstream error propagate — there's no point swallowing on top of
-   * a DB that's already unreachable.
+   * Best-effort status update. (Q7) lock: also stamps `failureCode`
+   * (enum) and `failureReason` (underlying exception message) so the
+   * client GET /problems/:id on a failed row gets structured
+   * diagnostic info — not just a status boolean.
    */
-  private async markFailed(problemId: number): Promise<void> {
+  private async markFailed(
+    problemId: number,
+    code: 'solver_timeout' | 'solver_failed' | 'image_read_failed',
+    reason: string,
+  ): Promise<void> {
     try {
       await this.prisma.problem.update({
         where: { id: problemId },
-        data: { status: 'failed' },
+        data: {
+          status: 'failed',
+          failureCode: code,
+          failureReason: reason.slice(0, 2000),
+        },
       });
     } catch (err) {
       this.logger.error(

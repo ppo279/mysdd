@@ -24,6 +24,22 @@ enum EnumStatus {
   failed
 }
 
+// (Q7) lock: classify `failed` Problems by the path that produced
+// the failure. Five codes match the five catch paths that call
+// `markFailed`:
+//   - upload_storage_failed    — slice 1: storage.put threw on upload
+//   - upload_db_update_failed  — slice 1: DB update failed after put
+//   - image_read_failed        — slice 2: solver's storage.read threw
+//   - solver_timeout           — slice 2: AbortError after SOLVER_TIMEOUT_MS
+//   - solver_failed            — slice 2: generic SDK / parse / network
+enum EnumFailureCode {
+  upload_storage_failed
+  upload_db_update_failed
+  image_read_failed
+  solver_timeout
+  solver_failed
+}
+
 // 家长端用户
 model User {
   id    Int     @id @default(autoincrement())
@@ -66,6 +82,12 @@ model Problem {
   status EnumStatus @default(pending)
   createTime DateTime @default(now())
   updatedAt DateTime?  @updatedAt
+  // (Q7) lock: when status='failed', `failureCode` classifies the
+  // failure path (5 codes — see EnumFailureCode doc) and
+  // `failureReason` carries the underlying exception message for
+  // debugging. Both NULL when status != 'failed'.
+  failureCode EnumFailureCode?
+  failureReason String?
   // 一对多（Problem 必须属于一个 Chile）
   childId Int
   child   Child @relation(fields: [childId], references: [id])

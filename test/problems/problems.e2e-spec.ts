@@ -784,7 +784,13 @@ describe('ProblemsModule (e2e)', () => {
         // The failure path emits `status: failed` then `error` then closes.
         expect(types).toContain('error');
         const errorFrame = events.find((e) => e.event === 'error');
-        expect(errorFrame?.data).toEqual({ message: '解题失败，请稍后重试' });
+        // (Q7) lock: error payload carries message + code + reason.
+        // The fake's "upstream blew up" → solver_failed code.
+        expect(errorFrame?.data).toEqual({
+          message: '解题失败，请稍后重试',
+          code: 'solver_failed',
+          reason: 'upstream blew up',
+        });
 
         // DB: row marked failed, no Solution created.
         const row = await prisma.problem.findUnique({
@@ -792,6 +798,9 @@ describe('ProblemsModule (e2e)', () => {
           include: { solution: true },
         });
         expect(row?.status).toBe('failed');
+        // (Q7) lock: failure classification persisted to DB.
+        expect(row?.failureCode).toBe('solver_failed');
+        expect(row?.failureReason).toBe('upstream blew up');
         // (A) 1:0..1 singleton — failed path leaves solution as null.
         expect(row?.solution).toBeNull();
       } finally {

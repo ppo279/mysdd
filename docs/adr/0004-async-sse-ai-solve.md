@@ -37,12 +37,12 @@
    - `reasoning_delta` — 多帧 `{text}`
    - `content_delta` — 多帧 `{text}`
    - `done` — 末帧 `{problemId, solutionId, usage}`（`usage` 是 SDK `finalMessage().usage` 全量 JSON，与 DB `Solution.usage` 1:1 mirror — 见 (γ) 锁 / 002 issue）
-   - `error` — 异常分支 `{message}`
+   - `error` — 异常分支 `{message, code, reason}`（(Q7) 锁：`code` 是 `EnumFailureCode` 中枚举值，与 DB `Problem.failureCode` 1:1；`reason` 是底层异常 message，与 `Problem.failureReason` 1:1 — see 002 issue / Q7 实施 commit）
 4. **180s 硬超时**（`SOLVER_TIMEOUT_MS`），`AbortController.timeout` 套 stream
 5. **不自叠 retry**：信任 `@anthropic-ai/sdk` 内置网络重试（外加会和 SDK 退避冲突）
-6. **失败语义**：`prisma.problem.update({ status: 'failed' })` → SSE 发 `event: error` → 流关闭
+6. **失败语义**：`prisma.problem.update({ status: 'failed', failureCode, failureReason })` → SSE 发 `event: error` → 流关闭（(Q7) 锁：DB 落 classification，SSE 同步推 code+reason）
 7. **并发抢占**：`updateMany({ where: { id, status: 'pending' } })` 原子锁；`count === 0` → `findUnique` 读真实 status → 发 `status: <real>` 后立即关闭（避免双开 stream 重复烧钱）— (Q6) 锁后行为
-8. **断线兜底**：`GET /problems/:id` 返回当前 status + 终态 solution；**不重放过去的 delta**（PRD 第 406 行明确）
+8. **断线兜底**：`GET /problems/:id` 返回当前 status + 终态 solution + `failureCode`/`failureReason`（failed 行）；**不重放过去的 delta**（PRD 第 406 行明确）
 
 ### 客户端 transport
 

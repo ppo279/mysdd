@@ -30,6 +30,7 @@ client GET /problems/:id/stream  (Authorization: Bearer ...)
          │    count === 0 → findUnique({ select: { status } })
          │               → sse.emit('status', { status: real })
          │               → sse.complete()
+         │    (Q6) 锁：透传真实 status，不再 fold `already_processing`
          ├─ prisma.problem.findUnique({
          │    include: { child: { select: { grade: true } } }
          │  })
@@ -50,10 +51,15 @@ client GET /problems/:id/stream  (Authorization: Bearer ...)
          │    prisma.solution.create({ content, model, usage: final.usage, problemId }),
          │    prisma.problem.update({ status: 'done' }),
          │  ])
-         ├─ sse.emit('done', { problemId, solutionId, totalTokens })
-         └─ any throw → prisma.problem.update({ status: 'failed' })
-                    → sse.emit('error', { message: '...' })
+         ├─ sse.emit('done', { problemId, solutionId, usage })
+         └─ any throw → prisma.problem.update({
+                          status: 'failed',
+                          failureCode: 'solver_timeout' | 'solver_failed' | 'image_read_failed',
+                          failureReason: err.message,
+                        })
+                    → sse.emit('error', { message, code, reason })
                     → sse.complete()
+                    (Q7) 锁：DB 与 SSE 同步推 code+reason
 ```
 
 **新增/扩展**：
@@ -76,7 +82,7 @@ client GET /problems/:id/stream  (Authorization: Bearer ...)
 | `reasoning_delta` | `{ text: string }` | 零或多条 |
 | `content_delta` | `{ text: string }` | 零或多条 |
 | `done` | `{ problemId, solutionId, usage }` | 流结束前最后一帧（`usage` 是 SDK `finalMessage().usage` 全量 JSON，与 DB `Solution.usage` 1:1 mirror — 见 (γ) 锁） |
-| `error` | `{ message: string }` | 异常分支 |
+| `error` | `{ message: string, code: EnumFailureCode, reason: string }` | 异常分支（(Q7) 锁：`code` ∈ {`image_read_failed`, `solver_timeout`, `solver_failed`}，与 DB `Problem.failureCode` 1:1；`reason` 是底层异常 message） |
 
 心跳：每 15 秒发一次 `: keep-alive\n\n`（注释行，无 event 字段，被 EventSource/前端解析器忽略）。
 
@@ -84,11 +90,21 @@ client GET /problems/:id/stream  (Authorization: Bearer ...)
 
 ## Locked error messages（来自 PRD）
 
-| 触发 | 消息 |
-|---|---|
-| 求解超时（>180s） | `解题超时，请稍后重试` |
-| 求解其他错误 | `解题失败，请稍后重试` |
-| 并发抢占失败（已有 solve in-flight） | SSE `status: <real>`（mid-flight 是 `solving`；已结束是 `done` / `failed`）后立即关闭 — (Q6) 锁透传真实状态 |
+| 触发 | message（用户面） | code（(Q7) EnumFailureCode） | reason（DB 落 + SSE 推） |
+|---|---|---|---|
+| 求解超时（>180s） | `解题超时，请稍后重试` | `solver_timeout` | AbortError message |
+| 求解其他错误（SDK / parse / network） | `解题失败，请稍后重试` | `solver_failed` | 底层异常 message |
+| 图片读取失败（storage throw） | `解题失败，请稍后重试` | `image_read_failed` | 底层 storage error |
+| 并发抢占失败（已有 solve in-flight） | SSE `status: <real>`（mid-flight 是 `solving`；已结束是 `done` / `failed`）后立即关闭 — (Q6) 锁透传真实状态 | — | — |
+
+slice 1 的两个失败路径（upload 阶段）也归入 `EnumFailureCode`：
+
+| 触发 | message | code |
+|---|---|---|
+| storage.put 抛错（upload 期间） | `服务器内部错误` | `upload_storage_failed` |
+| DB update after storage.put 抛错 | `服务器内部错误` | `upload_db_update_failed` |
+
+(DB 上 `failureCode` / `failureReason` 由 `ProblemsService.markFailed` 与 `ProblemSolverService.markFailed` 各自在 catch 里写入。)
 
 ## Locked concurrency guard（来自 PRD）
 
