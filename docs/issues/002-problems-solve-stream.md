@@ -76,7 +76,7 @@ client GET /problems/:id/stream  (Authorization: Bearer ...)
 | `status` | `{ status: 'pending' \| 'solving' \| 'done' \| 'failed' \| 'already_processing' }` | 第一帧 |
 | `reasoning_delta` | `{ text: string }` | 零或多条 |
 | `content_delta` | `{ text: string }` | 零或多条 |
-| `done` | `{ problemId, solutionId, totalTokens }` | 流结束前最后一帧 |
+| `done` | `{ problemId, solutionId, usage }` | 流结束前最后一帧（`usage` 是 SDK `finalMessage().usage` 全量 JSON，与 DB `Solution.usage` 1:1 mirror — 见 (γ) 锁） |
 | `error` | `{ message: string }` | 异常分支 |
 
 心跳：每 15 秒发一次 `: keep-alive\n\n`（注释行，无 event 字段，被 EventSource/前端解析器忽略）。

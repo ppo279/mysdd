@@ -20,6 +20,7 @@
  * - The controller stays small: the @Sse() handler is mostly
  *   "translate sink events into observable events" and not much else.
  */
+import type { Usage } from '../integrations/anthropic/anthropic-client';
 
 export type SseEventName =
   | 'status'
@@ -32,12 +33,18 @@ export type SseEventName =
  * The five PRD-locked event payloads. Adding a new event = adding a
  * case here + bumping the solver. The `status` payload has the union
  * of all Problem statuses the stream can announce (including
- * `already_processing` for the concurrency-guard fast path).
+ * `already_processing` for the concurrency-guard fast path — (Q6)
+ * lock will remove this; tracked in 002 issue).
+ *
+ * (γ) `done` payload carries the full SDK `usage` JSON (not a
+ * derived number) so the SSE channel and DB `Solution.usage`
+ * are 1:1 mirror — clients can do cost analysis from
+ * accumulated SSE events without a follow-up GET.
  */
 export type SseEventPayload =
   | { status: 'pending' | 'solving' | 'done' | 'failed' | 'already_processing' }
   | { text: string }
-  | { problemId: number; solutionId: number; totalTokens: number | null }
+  | { problemId: number; solutionId: number; usage: Usage }
   | { message: string };
 
 export interface SseSink {

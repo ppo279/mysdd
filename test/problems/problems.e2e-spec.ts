@@ -702,11 +702,21 @@ describe('ProblemsModule (e2e)', () => {
         expect(firstReal?.data).toEqual({ status: 'solving' });
         // Last event must be `done` (or `error` for failure paths).
         expect(types[types.length - 1]).toBe('done');
-        // The done payload shape is locked.
+        // The done payload shape is locked — per (γ) lock, `usage`
+        // is the FULL SDK usage JSON object (not a derived number).
+        // Mirrors DB `Solution.usage` 1:1 — clients can do cost
+        // analysis from accumulated SSE events without a follow-up
+        // GET. (Q6) follow-up commit will extend this contract to
+        // the late-arrival path.
         const doneFrame = events.find((e) => e.event === 'done');
         expect(doneFrame?.data).toMatchObject({
           problemId,
-          totalTokens: 42,
+          usage: {
+            input_tokens: 100,
+            output_tokens: 42,
+            cache_creation_input_tokens: null,
+            cache_read_input_tokens: null,
+          },
         });
         expect((doneFrame?.data as { solutionId: number }).solutionId).toEqual(
           expect.any(Number),

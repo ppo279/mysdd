@@ -1,5 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Prisma } from '@prisma/client';
 import type { Readable } from 'stream';
 import type { AnthropicClient } from '../integrations/anthropic/anthropic-client';
 import { ANTHROPIC_CLIENT } from '../integrations/anthropic/anthropic.tokens';
@@ -160,12 +161,6 @@ export class ProblemSolverService {
     // reasoning is SSE-only and never persisted. Only the answer
     // text goes into the Solution row.
     let answerText = '';
-    // (C) usage holds the full SDK `finalMessage().usage` object;
-    // emitted on the SSE `done` event in (γ) follow-up commit.
-    // `totalTokens` (a derived number) is kept here for the
-    // intermediate state — (γ) will replace it.
-    let totalTokens: number | null = null;
-    let usage: import('../integrations/anthropic/anthropic-client').Usage | null = null;
 
     try {
       // 5. Open the stream. The SDK's `.on('text')` and
@@ -210,13 +205,13 @@ export class ProblemSolverService {
       });
 
       // 7. Wait for the stream to finish. `finalMessage()` resolves
-      //    with the assembled message object — we capture the FULL
-      //    `usage` object per (C) lock (no folding to just
-      //    output_tokens). (γ) follow-up commit will plumb it to
-      //    the SSE `done` event payload.
+      //    with the assembled message — we capture the FULL `usage`
+      //    object per (C) lock (no folding to just output_tokens),
+      //    and emit it verbatim on the SSE `done` event per (γ)
+      //    lock. The DB `Solution.usage` column and the SSE
+      //    `done` payload are 1:1 — clients can do cost analysis
+      //    from accumulated SSE events without a follow-up GET.
       const final = await stream.finalMessage();
-      totalTokens = final.usage.output_tokens;
-      usage = final.usage;
 
       // 8. Commit the result. One short transaction — we never hold
       //    a DB transaction across a 180s AI call.
@@ -227,7 +222,12 @@ export class ProblemSolverService {
             content: answerText,
             model: MODEL_ID,
             // (C) Solution.usage is the full SDK usage JSON object.
-            usage: usage as object,
+            // Cast at the Prisma boundary: Prisma's `InputJsonValue`
+            // demands an index signature that the SDK-faithful `Usage`
+            // type intentionally does NOT carry (we want to mirror
+            // the SDK shape exactly — see (γ) lock). The runtime
+            // value is plain JSON and serializes correctly.
+            usage: final.usage as unknown as Prisma.InputJsonValue,
           },
           select: { id: true },
         });
@@ -238,7 +238,13 @@ export class ProblemSolverService {
         return created;
       });
 
-      sink.emit('done', { problemId, solutionId: solution.id, totalTokens });
+      // (γ) SSE done payload carries the FULL usage JSON, not a
+      // derived number. Mirrors DB `Solution.usage` 1:1.
+      sink.emit('done', {
+        problemId,
+        solutionId: solution.id,
+        usage: final.usage,
+      });
     } catch (err) {
       // Failure path: translate the throw to a Chinese user-facing
       // message. Distinguish timeout (AbortError) from generic
