@@ -27,6 +27,10 @@ _Avoid_: Solution.image / Problem 附件
 `status='failed'` 的 Problem 行**没有** Solution，但 image 是用户的可重看数据。`GET /problems/:id/image` 对 `status='failed'` 且 `imageUrl != ''` 时返 **200**，AI 状态通过响应头 `X-AI-Status: failed` 透出（**不挡 body**）。
 _Avoid_: terminated Problem / abandoned Problem
 
+**SSE 第一帧契约**：
+subscribe 收到的**第一个** `status` 事件 payload 必为 Problem 当前真实 status（`solving` / `done` / `failed` 之一），**无 `already_processing` 折叠**。若 subscribe 命中 `done` 行，紧跟 emit 一次 `done` 事件（payload `{problemId, solutionId, usage}`，usage 与 DB `Solution.usage` 1:1 mirror）后流关闭；若命中 `failed`，紧跟 emit 一次 `error`（payload `{message}`）后流关闭。client **0 后置 GET**——首次订阅即可拿到最终 solution 或失败原因，与 (γ) 原则对齐。
+_Avoid_: "subscribe 拿到 already_processing 就走 GET" / late-arrival hack
+
 ---
 
 ## 0. 项目现状速览
