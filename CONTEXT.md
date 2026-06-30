@@ -12,7 +12,7 @@
 > **任何代码 / PR 评审若用了 _Avoid_ 里的词，视为脏字，需替换。**
 
 **解题思路 (Solution)**：
-与一条 Problem 1:0..1 对应的最终答案文字。一条 Problem **成功求解后最多 1 条** Solution 行；失败路径**不写** Solution。Solution 行**必含三个不可省字段**：(a) `content` 最终答案文字；(b) `model` 模型标识（如 `MiniMax-M3`）；(c) `usage` LLM token 使用量 = Anthropic SDK `finalMessage().usage` 的全量 JSON 对象（`input_tokens` / `output_tokens`，可选 `cache_creation_input_tokens` / `cache_read_input_tokens`）。schema 当前是 1:N（`solutions Solution[]`）+ 列 `token Int?`（**字面谎**：实际只存 `output_tokens`，列名误导读者以为是 input / output / total 中任一），下一步迁移收窄为 `solution Solution?` + 列 `usage Json?`（字段名 + 形状一起对齐 SDK）。
+与一条 Problem 1:0..1 对应的最终答案文字。一条 Problem **成功求解后最多 1 条** Solution 行；失败路径**不写** Solution。Solution 行**必含三个不可省字段**：(a) `content` 最终答案文字；(b) `model` 模型标识（如 `MiniMax-M3`）；(c) `usage` LLM token 使用量 = Anthropic SDK `finalMessage().usage` 的全量 JSON 对象（`input_tokens` / `output_tokens`，可选 `cache_creation_input_tokens` / `cache_read_input_tokens`）。**SSE `done` 事件 payload 与 DB 行 1:1 mirror**：SSE 收 `{problemId, solutionId, usage}`，与 DB `Solution.usage` 同形状，前端累积 SSE done 即可做 cost 分析，无需后置 GET `/problems/:id`。schema 当前是 1:N（`solutions Solution[]`）+ 列 `token Int?`（**字面谎**：实际只存 `output_tokens`，列名误导读者以为是 input / output / total 中任一），下一步迁移收窄为 `solution Solution?` + 列 `usage Json?`（字段名 + 形状一起对齐 SDK）。
 _Avoid_: 解题尝试 / Attempt / Answer
 
 **Problem**：
