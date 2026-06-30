@@ -1,0 +1,14 @@
+-- (A) lock: a Problem has at most one Solution (1:0..1 singleton).
+-- Enforced at the storage layer via a UNIQUE constraint on
+-- Solution.problemId. The FK from Solution to Problem is unchanged
+-- — only the cardinality tightening is new.
+--
+-- Why a UNIQUE index (not just a CHECK): a CHECK with a subquery
+-- against Problem would be circular (Problem → Solution → Problem)
+-- and Postgres rejects self-referential subqueries in CHECK.
+-- UNIQUE on the child side is the standard pattern.
+--
+-- A second `INSERT INTO "Solution"("problemId", ...)` for the same
+-- problem fails with Postgres error 23505 (unique_violation),
+-- surfaced by Prisma as P2002.
+CREATE UNIQUE INDEX "Solution_problemId_key" ON "Solution"("problemId");

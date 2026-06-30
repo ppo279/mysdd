@@ -735,17 +735,18 @@ describe('ProblemsModule (e2e)', () => {
         // DB state: status=done, exactly one Solution row.
         const row = await prisma.problem.findUnique({
           where: { id: problemId },
-          include: { solutions: true },
+          include: { solution: true },
         });
         expect(row?.status).toBe('done');
-        expect(row?.solutions).toHaveLength(1);
-        expect(row?.solutions[0]?.content).toBe('The answer is 42.');
-        expect(row?.solutions[0]?.model).toBe('MiniMax-M3');
+        // (A) lock: 1:0..1 singleton — at most one Solution per Problem.
+        expect(row?.solution).not.toBeNull();
+        expect(row?.solution?.content).toBe('The answer is 42.');
+        expect(row?.solution?.model).toBe('MiniMax-M3');
         // (C) Solution.usage is the full SDK usage JSON object, not
         // just output_tokens. Asserts on input_tokens + output_tokens;
         // cache fields are null in the default fake flow (no prompt
         // caching exercised).
-        expect(row?.solutions[0]?.usage).toEqual({
+        expect(row?.solution?.usage).toEqual({
           input_tokens: 100,
           output_tokens: 42,
           cache_creation_input_tokens: null,
@@ -788,10 +789,11 @@ describe('ProblemsModule (e2e)', () => {
         // DB: row marked failed, no Solution created.
         const row = await prisma.problem.findUnique({
           where: { id: problemId },
-          include: { solutions: true },
+          include: { solution: true },
         });
         expect(row?.status).toBe('failed');
-        expect(row?.solutions).toHaveLength(0);
+        // (A) 1:0..1 singleton — failed path leaves solution as null.
+        expect(row?.solution).toBeNull();
       } finally {
         await cleanupTestUser(user.id);
       }

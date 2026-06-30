@@ -69,8 +69,13 @@ model Problem {
   // 一对多（Problem 必须属于一个 Chile）
   childId Int
   child   Child @relation(fields: [childId], references: [id])
-  // 有多个 Solution
-  solutions Solution[]
+  // (A) lock: a Problem has at most one Solution (1:0..1 singleton).
+  // The UNIQUE constraint on Solution.problemId — added in migration
+  // `solution_one_to_zero_or_one` — enforces the cardinality at the
+  // storage layer. A second `solution.create` for the same problem
+  // fails with Prisma P2002, which the solver does not catch (we
+  // don't expect a re-solve path in this slice).
+  solution Solution?
 }
 // 解题思路
 model Solution {
@@ -84,8 +89,9 @@ model Solution {
   // input/output/total 中任一总称; 改 'usage' 后字段名 + 形状都对齐 SDK
   // 见 CONTEXT §Language '解题思路' 条目 (C 锁)
   usage Json?
-  // 属于一个Problem
-  problemId Int
+  // (A) lock: at most one Solution per Problem. UNIQUE enforces the
+  // 1:0..1 singleton cardinality at the storage layer.
+  problemId Int     @unique
   // 反向关系
   problem  Problem @relation(fields: [problemId], references: [id])
 }

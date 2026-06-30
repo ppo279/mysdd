@@ -159,9 +159,11 @@ export class ProblemsService {
         childId: true,
         createTime: true,
         status: true,
-        solutions: {
-          orderBy: { createTime: 'desc' },
-          take: 1,
+        // (A) lock: at most one Solution per Problem (1:0..1
+        // singleton). Enforced at the storage layer via UNIQUE on
+        // Solution.problemId. The Prisma client relation field
+        // name 'solution' (singular, optional) reflects this.
+        solution: {
           select: {
             id: true,
             content: true,
@@ -184,13 +186,13 @@ export class ProblemsService {
       imageUrl: apiImagePath(problem.id),
       status: problem.status,
       createTime: problem.createTime,
-      solution: problem.solutions[0]
+      solution: problem.solution
         ? {
-            id: problem.solutions[0].id,
-            content: problem.solutions[0].content,
-            model: problem.solutions[0].model,
-            usage: problem.solutions[0].usage,
-            createTime: problem.solutions[0].createTime,
+            id: problem.solution.id,
+            content: problem.solution.content,
+            model: problem.solution.model,
+            usage: problem.solution.usage,
+            createTime: problem.solution.createTime,
           }
         : null,
     };
