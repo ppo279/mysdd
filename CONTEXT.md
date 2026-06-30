@@ -24,8 +24,8 @@ _Avoid_: Task / Job
 _Avoid_: Solution.image / Problem 附件
 
 **失败 Problem (failed Problem)**：
-`status='failed'` 的 Problem 行**没有** Solution，但 image 是用户的可重看数据。`GET /problems/:id/image` 对 `status='failed'` 且 `imageUrl != ''` 时返 **200**，AI 状态通过响应头 `X-AI-Status: failed` 透出（**不挡 body**）。
-_Avoid_: terminated Problem / abandoned Problem
+`status='failed'` 的 Problem 行**没有** Solution，但 image 是用户的可重看数据。`GET /problems/:id/image` 对 `status='failed'` 且 `imageUrl != ''` 时返 **200**，AI 状态通过响应头 `X-AI-Status: failed` 透出（**不挡 body**）。`status='failed'` 行**必含**两个失败上下文字段（schema 当前未引入，下一步迁移加）：(a) `failureCode: EnumFailureCode` —— 失败类型枚举（`TIMEOUT` / `LLM_4XX` / `LLM_5XX` / `IMAGE_READ` / `SDK_NETWORK` / `UNKNOWN`），client 据此做 retry 决策；(b) `failureReason: string` —— SDK 原始错误描述，**不**含用户内容（图片 / prompt），仅给调试 + UI 显示。SSE `error` 事件 payload 与 DB 1:1 mirror：`{message, code: failureCode, reason: failureReason}`，live + late-arrival 都透传，client 0 后置 GET。
+_Avoid_: terminated Problem / abandoned Problem / "all failures 折叠为同一 message"
 
 **SSE 第一帧契约**：
 subscribe 收到的**第一个** `status` 事件 payload 必为 Problem 当前真实 status（`solving` / `done` / `failed` 之一），**无 `already_processing` 折叠**。若 subscribe 命中 `done` 行，紧跟 emit 一次 `done` 事件（payload `{problemId, solutionId, usage}`，usage 与 DB `Solution.usage` 1:1 mirror）后流关闭；若命中 `failed`，紧跟 emit 一次 `error`（payload `{message}`）后流关闭。client **0 后置 GET**——首次订阅即可拿到最终 solution 或失败原因，与 (γ) 原则对齐。
