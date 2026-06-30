@@ -119,7 +119,11 @@ export class ProblemsController {
    * Decorated `@RawResponse()` because binary image bytes cannot be
    * JSON-wrapped by the success envelope.
    *
-   * 200 → image bytes with `Content-Type` matching the original upload
+   * 200 → image bytes with `Content-Type` matching the original upload.
+   *       For `status: 'failed'` rows whose `imageUrl` is non-empty,
+   *       the response carries `X-AI-Status: failed` to signal the
+   *       failure context to the client (per (β) lock — body is not
+   *       blocked, the image is still served).
    * 401 / 404 → standard `{code, message, traceId}` error envelope
    */
   @Get(':id/image')
@@ -129,7 +133,7 @@ export class ProblemsController {
     @Param('id', ParseIntPipe) id: number,
     @Res({ passthrough: false }) res: Response,
   ): Promise<void> {
-    const { stream, mime } = await this.problemsService.getImage(
+    const { stream, mime, aiStatus } = await this.problemsService.getImage(
       user.userId,
       id,
     );
@@ -137,6 +141,11 @@ export class ProblemsController {
     res.setHeader('Content-Type', mime);
     // Disable caching of authenticated images — they're user-scoped.
     res.setHeader('Cache-Control', 'private, no-store');
+    if (aiStatus === 'failed') {
+      // (β) failed Problem with non-empty imageUrl → still serve the
+      // image, but signal the AI failure context via header.
+      res.setHeader('X-AI-Status', 'failed');
+    }
 
     // Pipe the storage stream straight to the response. We deliberately
     // do NOT await the pipe — it completes asynchronously and any errors

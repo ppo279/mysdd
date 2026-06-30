@@ -228,10 +228,14 @@ export class ProblemsService {
    * Stream the stored image bytes. Returns the Readable plus the MIME
    * that was sniffed at upload time.
    *
-   * Status guard: a `status: 'failed'` row never has a usable image —
-   * either the file was never written (step 3 failed) or the storage key
-   * is empty. Either way we report `problem 不存在` to the caller. This
-   * matches the IDOR miss response exactly (no status-leaking 410).
+   * (β) Failed-Problem accessibility: a `status: 'failed'` row whose
+   * `imageUrl` is non-empty STILL serves the image (HTTP 200) so the
+   * parent can re-see the photo they uploaded. The failure context is
+   * signalled via the `aiStatus: 'failed'` flag in the return — the
+   * controller propagates that as the `X-AI-Status: failed` response
+   * header (per (β) lock, no body block). `imageUrl === ''` is the
+   * only 404 condition beyond IDOR miss — placeholder rows (race
+   * window or step-3 failure) have no bytes to send.
    *
    * The controller wraps the Readable in `StreamableFile` and sets the
    * `Content-Type` header — we just hand back the raw stream + metadata.
@@ -239,13 +243,17 @@ export class ProblemsService {
   async getImage(
     userId: number,
     problemId: number,
-  ): Promise<{ stream: Readable; mime: string }> {
+  ): Promise<{
+    stream: Readable;
+    mime: string;
+    aiStatus: 'failed' | null;
+  }> {
     const problem = await this.prisma.problem.findFirst({
       where: { id: problemId, child: { userId } },
       select: { id: true, status: true, imageUrl: true },
     });
 
-    if (!problem || problem.status === 'failed') {
+    if (!problem || problem.imageUrl === '') {
       throw new NotFoundException('problem 不存在');
     }
 
@@ -254,7 +262,8 @@ export class ProblemsService {
     // MIME isn't stored separately — sniff from the storage key's extension.
     // The four-MIME whitelist means we have a 1:1 map (see LocalDiskStorageService).
     const mime = mimeFromKey(problem.imageUrl);
-    return { stream, mime };
+    const aiStatus = problem.status === 'failed' ? 'failed' : null;
+    return { stream, mime, aiStatus };
   }
 
   /**

@@ -495,16 +495,61 @@ describe('ProblemsModule (e2e)', () => {
       }
     });
 
-    it('case #12d — 404 problem 不存在 for failed-status row (status guard)', async () => {
-      // Simulates the rare step-4 failure path: row exists but status=failed.
-      // The image endpoint must reject it identically to IDOR miss.
+    it('case #12d — 200 + X-AI-Status: failed for failed-status row with non-empty imageUrl ((β) lock)', async () => {
+      // (β) Per the §Language lock: a `status: 'failed'` Problem whose
+      // imageUrl is non-empty STILL serves the image (200), with the
+      // failure context signalled via the `X-AI-Status: failed` response
+      // header. The body is not blocked — the parent can re-see the
+      // photo they uploaded. This case uses a real upload then mutates
+      // the row's status to 'failed' (mirroring a step-3 storage
+      // failure followed by janitor recovery, or a solve-time failure).
       const { user, accessToken } = await registerAndLogin(app, 'p-img-failed');
+      try {
+        const child = await createChild(app, { accessToken });
+        const createRes = await request(app.getHttpServer())
+          .post('/problems')
+          .set('Authorization', `Bearer ${accessToken}`)
+          .field('childId', String(child.id))
+          .attach('image', TINY_PNG)
+          .expect(201);
+        const problemId = createRes.body.data.id as number;
+
+        // Mutate the row to simulate a failed solve — imageUrl is
+        // already the real storage key from the upload.
+        await prisma.problem.update({
+          where: { id: problemId },
+          data: { status: 'failed' },
+        });
+
+        const res = await request(app.getHttpServer())
+          .get(`/problems/${problemId}/image`)
+          .set('Authorization', `Bearer ${accessToken}`)
+          .expect(200);
+
+        // (β) failure context is in the response header, not the body.
+        expect(res.headers['x-ai-status']).toBe('failed');
+        // Body is still the original image bytes.
+        expect(res.headers['content-type']).toMatch(/image\/png/);
+        const expected = await fs.readFile(TINY_PNG);
+        expect(Buffer.compare(res.body, expected)).toBe(0);
+      } finally {
+        await cleanupTestUser(user.id);
+      }
+    });
+
+    it('case #12e — 404 for imageUrl === "" placeholder row (no bytes to serve)', async () => {
+      // The complement to (β): when imageUrl is the empty placeholder
+      // (race window during POST, or step-3 storage failure left the
+      // file unwritten), there's no image to serve — 404. The
+      // status field is irrelevant here; the 404 is governed by
+      // imageUrl, not status.
+      const { user, accessToken } = await registerAndLogin(app, 'p-img-empty');
       try {
         const child = await createChild(app, { accessToken });
         const problem = await prisma.problem.create({
           data: {
             childId: child.id,
-            imageUrl: 'problems/999/missing.png',
+            imageUrl: '',
             status: 'failed',
           },
         });
