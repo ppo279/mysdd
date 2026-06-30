@@ -1,14 +1,15 @@
 ---
 id: 003-problems-phase-2-backlog
 title: 'Problems: Phase 2 积压（5 项打包）'
-status: open
+status: shipped
 triage: ready-for-human
 parent_prd: docs/prd/problems.md
 blocked_by: []
 covers_user_stories: []
 covers_e2e_cases: [8, 11d]
 created: 2026-06-26
-last_updated: 2026-06-29
+shipped_commit: 25394bd
+last_updated: 2026-06-30
 github_issue: 5
 ---
 
@@ -46,9 +47,24 @@ Problems PRD 里被刻意推迟的 5 项打包成单一积压条目。原始 iss
 
 ## Rationale
 
-PRD 显式说这 5 项**不阻塞** `/implement`，单独建 5 条 issue 只会增加噪音。本次 PR 把 5 项里能动的 4 项消化完，剩余 1 项（#4 `@Global()`）按设计意图保持阻塞。
+PRD 显式说这 5 项**不阻塞** `/implement`，单独建 5 条 issue 只会增加噪音。
+
+**Status update 2026-06-29**：5/5 items done.
+- #1 E2E case #8 landed 2026-06-26
+- #2 `Child.grade` CHECK landed 2026-06-29 (also DTO wired)
+- #3 Multer config extracted to `multer-options.ts` 2026-06-29
+- #4 `@Global()` lifted 2026-06-29 (commit `03873cb`, JanitorModule 是第二个 consumer) — 用户显式 override 了 #4 的 Children-blocked 门控条件
+- #5 `grade → teaching language` mapping 4 档 (primary / middle / higher / default) landed 2026-06-29
+
+`#4` 不再是"被设计意图保持阻塞"——它已被 override 并落地。Backlog 功能上 closed。
 
 ## References
 
 - 父 PRD：`docs/prd/problems.md` 「Deferred Items (Phase 2 / issue backlog)」段
 - 父 PRD 「Out of Scope」段中关于 `Last-Event-ID` / 静态托管 / OSS / 限流等已明确的"不做"决定（与本 backlog 不同：Out of Scope 是设计层面明确否决，Backlog 是有意推迟）
+
+---
+
+## Amendment log
+
+- **2026-06-30**：shipped. Commit `25394bd feat(problems): close 003 backlog items #2, #3, #5 (#4 stays gated)`（加上 `03873cb` lift #4 + `aa43e98` 加 janitor = #4 的 second consumer 落地）。Frontmatter status sync (`open` → `shipped`)，rationale 段重写反映 5/5 done。

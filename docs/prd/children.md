@@ -1,7 +1,7 @@
 # PRD: Children — 孩子档案 CRUD
 
-> Status: `ready-for-agent`
-> Triage: `ready-for-agent`
+> Status: `shipped` (commit `11f4967 feat(children): ChildrenModule CRUD endpoints (PRD children.md)`, 2026-06-29)
+> Triage: `ready-for-human`
 > Source: `/grill-with-docs` 14 题（2026-06-29），全部 A 选项达成共识
 > Parents: `docs/prd/problems.md` §Prerequisites + `CONTEXT.md` §6 "ChildrenModule CRUD（独立 PRD）"
 
@@ -15,6 +15,17 @@
 2. **e2e 测试在绕路**。`test/problems/problems.e2e-spec.ts` 通过 `prisma.child.create({ data: { name, grade, userId } })` 直接插库——这等于"测试代码用了一条生产代码不走的路径"，是个慢慢恶化的技术债。`fixtures/child.ts:5-9` 的注释自己写了"once [ChildrenModule] lands, this helper switches to POST /children"。
 3. **children PRD 是个承诺**。`docs/prd/problems.md` §Prerequisites 明确说："Children CRUD lives in a separate PRD and will be tracked as a follow-up"——这条 follow-up 现在是悬空的。
 4. **003 #4 阻塞解除**。`CONTEXT.md` §5 写明：`StorageModule` / `AnthropicModule` 是否升级 `@Global()` 的决策**门控**在 Children 落地之后（"等第二个 consumer"）；Children 不落地，那个决策就一直挂着。
+
+## Status update 2026-06-29
+
+Children 4 端点已落地（commit `11f4967 feat(children): ChildrenModule CRUD endpoints (PRD children.md)`），上述 4 个痛点全部闭环：
+
+1. `POST /children` / `GET /children` / `GET /children/:id` / `DELETE /children/:id` 4 端点全部上线，跑在 `JwtAuthGuard` 之后。
+2. e2e fixtures 同步切换：`test/problems/fixtures/child.ts` 在 `11f4967` 同批迁到走 `POST /children`，不再 `prisma.child.create` 直插。
+3. Children PRD 兑现，不再是悬空 follow-up。
+4. `StorageModule` / `AnthropicModule` 升级 `@Global()`（commit `03873cb`，JanitorModule 是第二个 consumer；Children 落地是更早的 first consumer 字面条件）。
+
+Detail: 详见 004 doc-drift 审计 `docs/issues/004-children-doc-drift.md` §2.4（children.md 内部结构 + 引用链）+ commit `82bee16`（004 + 005 同批 doc sync 收尾）。
 
 ## Solution
 

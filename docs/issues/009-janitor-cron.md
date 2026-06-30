@@ -1,6 +1,6 @@
 # Problems: Janitor cron 框架（solving 卡死 + orphan file 双 job）
 
-> GitHub: [#9](https://github.com/ppo279/mysdd/issues/9) | 状态: `ready-for-agent`
+> GitHub: [#9](https://github.com/ppo279/mysdd/issues/9) | 状态: `shipped` (commit `aa43e98`, 2026-06-29)
 
 ## Parent
 
@@ -58,31 +58,31 @@ src/janitor/
 ## Acceptance criteria
 
 ### 框架
-- [ ] `JanitorModule` 注册在 `AppModule`
-- [ ] `JanitorService` 实现 `OnModuleInit`（启动立即跑一次）+ `OnModuleDestroy`（清理 `setInterval`）
-- [ ] `Job` interface 含 `name` + `run(): Promise<JobResult>` + `JobResult { affected: number; durationMs: number }`
-- [ ] 统一调度周期 `JANITOR_INTERVAL_MS` env，默认 `60000`
-- [ ] 每个 job 单独日志：`[janitor] stuck-solving affected=3 duration=42ms`
+- [x] `JanitorModule` 注册在 `AppModule`
+- [x] `JanitorService` 实现 `OnModuleInit`（启动立即跑一次）+ `OnModuleDestroy`（清理 `setInterval`）
+- [x] `Job` interface 含 `name` + `run(): Promise<JobResult>` + `JobResult { affected: number; durationMs: number }`
+- [x] 统一调度周期 `JANITOR_INTERVAL_MS` env，默认 `60000`
+- [x] 每个 job 单独日志：`[janitor] stuck-solving affected=3 duration=42ms`
 
 ### Job 1: StuckSolvingJob
-- [ ] `pnpm test:e2e -- --testPathPattern=problems` 24/24 仍全过
-- [ ] e2e case A：直接 `prisma.problem.update({ status: 'solving', updatedAt: <6min ago> })` → 等 sweep → 断言 `status='pending'`
-- [ ] e2e case B：直接 `prisma.problem.update({ status: 'solving', updatedAt: <2min ago> })` → 等 sweep → 断言 `status='solving'`（不被误杀）
-- [ ] 阈值 `STUCK_SOLVING_THRESHOLD_MS` env，默认 `300000`
+- [x] `pnpm test:e2e -- --testPathPattern=problems` 24/24 仍全过
+- [x] e2e case A：直接 `prisma.problem.update({ status: 'solving', updatedAt: <6min ago> })` → 等 sweep → 断言 `status='pending'`
+- [x] e2e case B：直接 `prisma.problem.update({ status: 'solving', updatedAt: <2min ago> })` → 等 sweep → 断言 `status='solving'`（不被误杀）
+- [x] 阈值 `STUCK_SOLVING_THRESHOLD_MS` env，默认 `300000`
 
 ### Job 2: OrphanFileJob
-- [ ] e2e case C：在 `./uploads/problems/<userId>/` 写一个随机 UUID 文件 + DB 无对应行 → 等 sweep → 文件被删
-- [ ] e2e case D：写文件 + DB 有对应 Problem 行 (`status='pending'`) → 文件保留
-- [ ] e2e case E：写文件 + DB 有对应 Problem 行 (`status='failed'`) → 文件被删（orphan 兜底）
-- [ ] 遍历 `uploads/problems/` 用 `fs.readdir`，不递归过深
+- [x] e2e case C：在 `./uploads/problems/<userId>/` 写一个随机 UUID 文件 + DB 无对应行 → 等 sweep → 文件被删
+- [x] e2e case D：写文件 + DB 有对应 Problem 行 (`status='pending'`) → 文件保留
+- [x] e2e case E：写文件 + DB 有对应 Problem 行 (`status='failed'`) → 文件被删（orphan 兜底）
+- [x] 遍历 `uploads/problems/` 用 `fs.readdir`，不递归过深
 
 ### 回归
-- [ ] `pnpm test:e2e -- --testPathPattern=auth` 15/15 全过
-- [ ] `pnpm test:e2e -- --testPathPattern=response-shape` 7/7 全过
-- [ ] `pnpm lint` 干净，`pnpm build` 干净
+- [x] `pnpm test:e2e -- --testPathPattern=auth` 15/15 全过
+- [x] `pnpm test:e2e -- --testPathPattern=response-shape` 7/7 全过
+- [x] `pnpm lint` 干净，`pnpm build` 干净
 
 ### 配置
-- [ ] `.env.example` 增加 `JANITOR_INTERVAL_MS`、`STUCK_SOLVING_THRESHOLD_MS` 注释说明
+- [x] `.env.example` 增加 `JANITOR_INTERVAL_MS`、`STUCK_SOLVING_THRESHOLD_MS` 注释说明
 
 ## Blocked by
 
@@ -94,3 +94,9 @@ None — 可以立即开始
 - `CONTEXT.md` §2 Q7c (5min 卡死阈值 + 不主动重跑决策)
 - `docs/adr/0004-async-sse-ai-solve.md` §"反向条件"（mid-stream 崩溃）
 - `docs/adr/0006-storage-interface-local-disk.md` §"Consequences"（orphan file 风险）
+
+---
+
+## Amendment log
+
+- **2026-06-30**：shipped. Commit `aa43e98 feat(jobs): janitor cron — stuck-solving sweeper + orphan file cleanup (issue 009)`. Acceptance criteria all checked (24/24 problems + 15/15 auth + 7/7 response-shape e2e, lint 0 errors, build clean). Status sync (`ready-for-agent` → `shipped`) per housekeeping pass.

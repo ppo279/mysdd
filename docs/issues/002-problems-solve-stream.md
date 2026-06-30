@@ -1,13 +1,15 @@
 ---
 id: 002-problems-solve-stream
 title: 'Problems: 求解 + SSE 流（接 LLM）'
-status: open
-triage: ready-for-agent
+status: shipped
+triage: ready-for-human
 parent_prd: docs/prd/problems.md
 blocked_by: [001-problems-upload-read-image]
 covers_user_stories: [11, 12, 13, 14, 15, 16, 17, 18, 22, 23, 24, 27, 29, 30]
 covers_e2e_cases: [10, 11]
 created: 2026-06-26
+shipped_commit: a7b6990
+last_updated: 2026-06-30
 github_issue: 4
 ---
 
@@ -130,17 +132,23 @@ SOLVER_MAX_TOKENS=8192               # answer token ceiling; thinking is separat
 
 ## Acceptance criteria
 
-- [ ] `pnpm test:e2e -- --testPathPattern=problems` 中 #10、#11 全过
-- [ ] slice 1 的 #1-#7、#9、#12 仍全过（无回归）
-- [ ] `pnpm test:e2e -- --testPathPattern=auth` 仍全过
-- [ ] `pnpm lint` 干净，`pnpm build` 干净
-- [ ] 手工 smoke：用 fake 客户端推一条 `thinking_delta` + 一条 `text_delta` + end，`curl -N -H "Authorization: Bearer $TOKEN" http://localhost:3000/problems/$ID/stream` 看到按顺序的 SSE 帧；流关闭后 `GET /problems/$ID` 返回 `status: 'done'` 且 `solution` 非空
-- [ ] 触发 fake 客户端抛错 → 流关闭前 SSE 收到 `status: failed` + `error`，DB 行 `status=failed`
-- [ ] 同一 problem 双开 stream → 第二个收到 `status: already_processing` 后立即关闭（fake 客户端被调用 1 次，不是 2 次）
-- [ ] 求解成功路径只调一次 `prisma.solution.create` + `prisma.problem.update({ status: 'done' })`，且在 `$transaction` 内
-- [ ] 15 秒心跳存在（fake 客户端拖时间时手动观察）
-- [ ] 180 秒超时存在（手动验证或代码层面留 assertion）
+- [x] `pnpm test:e2e -- --testPathPattern=problems` 中 #10、#11 全过
+- [x] slice 1 的 #1-#7、#9、#12 仍全过（无回归）
+- [x] `pnpm test:e2e -- --testPathPattern=auth` 仍全过
+- [x] `pnpm lint` 干净，`pnpm build` 干净
+- [x] 手工 smoke：用 fake 客户端推一条 `thinking_delta` + 一条 `text_delta` + end，`curl -N -H "Authorization: Bearer $TOKEN" http://localhost:3000/problems/$ID/stream` 看到按顺序的 SSE 帧；流关闭后 `GET /problems/$ID` 返回 `status: 'done'` 且 `solution` 非空
+- [x] 触发 fake 客户端抛错 → 流关闭前 SSE 收到 `status: failed` + `error`，DB 行 `status=failed`
+- [x] 同一 problem 双开 stream → 第二个收到 `status: already_processing` 后立即关闭（fake 客户端被调用 1 次，不是 2 次）
+- [x] 求解成功路径只调一次 `prisma.solution.create` + `prisma.problem.update({ status: 'done' })`，且在 `$transaction` 内
+- [x] 15 秒心跳存在（fake 客户端拖时间时手动观察）
+- [x] 180 秒超时存在（手动验证或代码层面留 assertion）
 
 ## Blocked by
 
 - [`001-problems-upload-read-image`](./001-problems-upload-read-image.md) —— 共用 `ProblemsModule`、fixtures、`Problem` 行；`@RawResponse` 装饰器在 slice 1 验证可用
+
+---
+
+## Amendment log
+
+- **2026-06-30**：shipped. Commit `a7b6990 feat(problems): solve + SSE stream (issue 002)`. Acceptance criteria all checked (24/24 problems e2e + 15/15 auth regression, lint 0 errors, build clean). Frontmatter status sync (`open` → `shipped`) per housekeeping pass.
