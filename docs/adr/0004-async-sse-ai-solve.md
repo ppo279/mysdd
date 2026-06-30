@@ -33,7 +33,7 @@
 1. **POST /problems 立刻返 201**（不预启动 AI），仅创建 Problem 行（status='pending'）
 2. **GET /problems/:id/stream 触发 AI 求解**，返回 `Content-Type: text/event-stream`
 3. **SSE 事件 schema**（locked）：
-   - `status` — 首帧 `{status: 'pending' | 'solving' | 'done' | 'failed' | 'already_processing'}`（`already_processing` 在 (Q6) 锁后会被去除，改为真实 status 透传 — see 002 issue / Q6 实施 commit）
+   - `status` — 首帧 `{status: 'pending' | 'solving' | 'done' | 'failed'}`（(Q6) 锁：late-arrival 透传真实 status，不再 fold 成 `already_processing` 标记 — see 002 issue / Q6 实施 commit）
    - `reasoning_delta` — 多帧 `{text}`
    - `content_delta` — 多帧 `{text}`
    - `done` — 末帧 `{problemId, solutionId, usage}`（`usage` 是 SDK `finalMessage().usage` 全量 JSON，与 DB `Solution.usage` 1:1 mirror — 见 (γ) 锁 / 002 issue）
@@ -41,7 +41,7 @@
 4. **180s 硬超时**（`SOLVER_TIMEOUT_MS`），`AbortController.timeout` 套 stream
 5. **不自叠 retry**：信任 `@anthropic-ai/sdk` 内置网络重试（外加会和 SDK 退避冲突）
 6. **失败语义**：`prisma.problem.update({ status: 'failed' })` → SSE 发 `event: error` → 流关闭
-7. **并发抢占**：`updateMany({ where: { id, status: 'pending' } })` 原子锁；`count === 0` → 发 `already_processing` 后立即关闭（避免双开 stream 重复烧钱）
+7. **并发抢占**：`updateMany({ where: { id, status: 'pending' } })` 原子锁；`count === 0` → `findUnique` 读真实 status → 发 `status: <real>` 后立即关闭（避免双开 stream 重复烧钱）— (Q6) 锁后行为
 8. **断线兜底**：`GET /problems/:id` 返回当前 status + 终态 solution；**不重放过去的 delta**（PRD 第 406 行明确）
 
 ### 客户端 transport

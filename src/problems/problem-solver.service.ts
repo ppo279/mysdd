@@ -36,10 +36,11 @@ const DEFAULT_SOLVER_MAX_TOKENS = 8_192;
  * Concurrency contract (PRD §"Concurrency guard"):
  *   1. Atomic `updateMany` flips `pending → solving`. If `count === 0`,
  *      somebody else got there first (or status is already `done` /
- *      `failed`); we emit `status: already_processing` and bail.
+ *      `failed`); we re-read the real status and emit it as the first
+ *      frame, then close — see (Q6) lock. No SDK call, no DB write.
  *   2. From that point on, exactly one solve is in flight for this
- *      problem. Two concurrent SSE opens → the second gets
- *      `already_processing` and the SDK is called once total.
+ *      problem. Two concurrent SSE opens → the second sees the real
+ *      (mid-flight) `solving` status and the SDK is called once total.
  *
  * Failure contract:
  *   Any throw (timeout, network, malformed JSON, 4xx, 5xx) → mark
@@ -80,21 +81,34 @@ export class ProblemSolverService {
    * - Pass a sink bound to the active SSE response.
    *
    * Returns once the stream has either emitted `done` (success),
-   * emitted `error` (failure), or detected `already_processing`
-   * (concurrency lost). The caller never gets a Promise rejection for
-   * expected failure modes — they all surface as `error` SSE frames.
-   * Programming errors (DB connection lost mid-write) DO reject.
+   * emitted `error` (failure), or emitted a late-arrival `status`
+   * (concurrency lost — see (Q6) lock). The caller never gets a
+   * Promise rejection for expected failure modes — they all surface
+   * as `error` SSE frames. Programming errors (DB connection lost
+   * mid-write) DO reject.
    */
   async solve(problemId: number, sink: SseSink): Promise<void> {
     // 1. Atomic state transition pending → solving. count === 0 means
     //    somebody else already started (or it's done/failed) — no SDK
-    //    call, no DB write, no further side effects.
+    //    call, no DB write, no further side effects. (Q6) lock: emit
+    //    the REAL status the late-arrival client should see, not a
+    //    folded `already_processing`. The client uses that status to
+    //    decide whether to poll (solving), GET (done), or retry
+    //    (failed).
     const claimed = await this.prisma.problem.updateMany({
       where: { id: problemId, status: 'pending' },
       data: { status: 'solving' },
     });
     if (claimed.count === 0) {
-      sink.emit('status', { status: 'already_processing' });
+      const real = await this.prisma.problem.findUnique({
+        where: { id: problemId },
+        select: { status: true },
+      });
+      // `real` is null only if the row was deleted between updateMany
+      // and findUnique — vanishingly rare, but we still surface a
+      // status rather than throwing (consistent with the
+      // not-found branch in the success path).
+      sink.emit('status', { status: real?.status ?? 'failed' });
       sink.complete();
       return;
     }

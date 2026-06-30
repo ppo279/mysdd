@@ -798,9 +798,12 @@ describe('ProblemsModule (e2e)', () => {
     });
 
     // ─────────────────────────────────────────────────────────
-    // case #11c — concurrency: second open gets `already_processing`
+    // case #11c — concurrency: late-arrival sees real status, no
+    // `already_processing` fold (Q6 lock). One stream is the winner
+    // (sees the full lifecycle including `done`); the other is the
+    // late-arrival loser (sees only `status: <real>` then closes).
     // ─────────────────────────────────────────────────────────
-    it('case #11c — double-open stream → second gets `already_processing` and the fake is called once', async () => {
+    it('case #11c — double-open stream → one wins (sees done), the other late-arrival sees real status only; fake called once', async () => {
       const { user, accessToken } = await registerAndLogin(app, 'p-solve-dbl');
       try {
         const child = await createChild(app, { accessToken });
@@ -818,7 +821,8 @@ describe('ProblemsModule (e2e)', () => {
         // Open both streams. The default success events resolve
         // quickly (microtasks), so by the time the second fetch
         // hits the server, the first is already mid-flight and the
-        // row is `solving`.
+        // row is `solving` — the loser's findUnique will see
+        // `solving` and emit that as the only frame.
         const firstEvents: Array<{ event: string | null; data: unknown }> = [];
         const secondEvents: Array<{ event: string | null; data: unknown }> = [];
 
@@ -834,21 +838,28 @@ describe('ProblemsModule (e2e)', () => {
         })();
         await Promise.all([c1, c2]);
 
-        // One of the two streams saw `done` (the winner) and the
-        // other saw `already_processing` (the loser). Which one is
-        // which is non-deterministic by race, so check the union.
-        const winner = [...firstEvents, ...secondEvents].filter(
-          (e) => e.event === 'done',
-        );
-        const loser = [...firstEvents, ...secondEvents].filter(
-          (e) =>
-            e.event === 'status' &&
-            (e.data as { status?: string })?.status === 'already_processing',
-        );
-        expect(winner).toHaveLength(1);
-        expect(loser).toHaveLength(1);
+        // (Q6) Exactly one stream saw `done` (the winner — that
+        // one's the solver's success path). The other is the
+        // late-arrival loser; it must NOT see `done`, and its
+        // first frame is a real status (one of `solving` / `done`
+        // / `failed` — never the old `already_processing` fold).
+        const streams = [firstEvents, secondEvents];
+        const winner = streams.find((s) => s.some((e) => e.event === 'done'));
+        const loser = streams.find((s) => !s.some((e) => e.event === 'done'));
+        expect(winner).toBeDefined();
+        expect(loser).toBeDefined();
 
-        // The fake was called exactly once across both opens.
+        // Loser sees ONE frame: the real status (no `done` /
+        // no `error`, no `already_processing`).
+        expect(loser!).toHaveLength(1);
+        const loserFrame = loser![0]!;
+        expect(loserFrame.event).toBe('status');
+        const loserStatus = (loserFrame.data as { status: string }).status;
+        expect(['pending', 'solving', 'done', 'failed']).toContain(loserStatus);
+        expect(loserStatus).not.toBe('already_processing');
+
+        // The fake was called exactly once across both opens
+        // (only the winner entered the SDK path).
         expect(fakeAi.streamCallCount).toBe(1);
       } finally {
         await cleanupTestUser(user.id);

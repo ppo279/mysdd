@@ -27,7 +27,8 @@ client GET /problems/:id/stream  (Authorization: Bearer ...)
          ├─ prisma.problem.updateMany(
          │    { where: { id, status: 'pending' }, data: { status: 'solving' } }
          │  )
-         │    count === 0 → sse.emit('status', { status: 'already_processing' })
+         │    count === 0 → findUnique({ select: { status } })
+         │               → sse.emit('status', { status: real })
          │               → sse.complete()
          ├─ prisma.problem.findUnique({
          │    include: { child: { select: { grade: true } } }
@@ -69,11 +70,9 @@ client GET /problems/:id/stream  (Authorization: Bearer ...)
 
 ## Locked SSE 事件 schema（来自 PRD，不要改）
 
-> **注**：`already_processing` 未出现在 PRD「SSE event schema」表（第 247 行），但 PRD「Locked concurrency guard」代码段（第 295 行）明确 `sse.emit('status', { status: 'already_processing' })`。**此处 schema 表已补全该值**，不是 issue 自创。
-
 | event | payload | 出现位置 |
 |---|---|---|
-| `status` | `{ status: 'pending' \| 'solving' \| 'done' \| 'failed' \| 'already_processing' }` | 第一帧 |
+| `status` | `{ status: 'pending' \| 'solving' \| 'done' \| 'failed' }` | 第一帧（(Q6) 锁：late-arrival 透传真实 status，不再 fold `already_processing`） |
 | `reasoning_delta` | `{ text: string }` | 零或多条 |
 | `content_delta` | `{ text: string }` | 零或多条 |
 | `done` | `{ problemId, solutionId, usage }` | 流结束前最后一帧（`usage` 是 SDK `finalMessage().usage` 全量 JSON，与 DB `Solution.usage` 1:1 mirror — 见 (γ) 锁） |
@@ -89,7 +88,7 @@ client GET /problems/:id/stream  (Authorization: Bearer ...)
 |---|---|
 | 求解超时（>180s） | `解题超时，请稍后重试` |
 | 求解其他错误 | `解题失败，请稍后重试` |
-| 并发抢占失败（已有 solve in-flight） | SSE `status: already_processing` 后立即关闭 |
+| 并发抢占失败（已有 solve in-flight） | SSE `status: <real>`（mid-flight 是 `solving`；已结束是 `done` / `failed`）后立即关闭 — (Q6) 锁透传真实状态 |
 
 ## Locked concurrency guard（来自 PRD）
 
@@ -99,7 +98,11 @@ const claimed = await prisma.problem.updateMany({
   data: { status: 'solving' },
 });
 if (claimed.count === 0) {
-  sse.emit('status', { status: 'already_processing' });
+  const real = await prisma.problem.findUnique({
+    where: { id: problemId },
+    select: { status: true },
+  });
+  sse.emit('status', { status: real?.status ?? 'failed' });
   sse.complete();
   return;
 }
@@ -138,7 +141,7 @@ SOLVER_MAX_TOKENS=8192               # answer token ceiling; thinking is separat
 - [x] `pnpm lint` 干净，`pnpm build` 干净
 - [x] 手工 smoke：用 fake 客户端推一条 `thinking_delta` + 一条 `text_delta` + end，`curl -N -H "Authorization: Bearer $TOKEN" http://localhost:3000/problems/$ID/stream` 看到按顺序的 SSE 帧；流关闭后 `GET /problems/$ID` 返回 `status: 'done'` 且 `solution` 非空
 - [x] 触发 fake 客户端抛错 → 流关闭前 SSE 收到 `status: failed` + `error`，DB 行 `status=failed`
-- [x] 同一 problem 双开 stream → 第二个收到 `status: already_processing` 后立即关闭（fake 客户端被调用 1 次，不是 2 次）
+- [x] 同一 problem 双开 stream → 第二个收到 `status: <real>`（mid-flight 时是 `solving`）后立即关闭（fake 客户端被调用 1 次，不是 2 次）— (Q6) 锁后行为
 - [x] 求解成功路径只调一次 `prisma.solution.create` + `prisma.problem.update({ status: 'done' })`，且在 `$transaction` 内
 - [x] 15 秒心跳存在（fake 客户端拖时间时手动观察）
 - [x] 180 秒超时存在（手动验证或代码层面留 assertion）

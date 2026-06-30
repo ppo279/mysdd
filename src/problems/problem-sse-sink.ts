@@ -32,9 +32,9 @@ export type SseEventName =
 /**
  * The five PRD-locked event payloads. Adding a new event = adding a
  * case here + bumping the solver. The `status` payload has the union
- * of all Problem statuses the stream can announce (including
- * `already_processing` for the concurrency-guard fast path — (Q6)
- * lock will remove this; tracked in 002 issue).
+ * of all Problem statuses the stream can announce — (Q6) lock dropped
+ * `already_processing`, so late-arrival clients now see the real
+ * status (`solving` / `done` / `failed`) instead of a folded marker.
  *
  * (γ) `done` payload carries the full SDK `usage` JSON (not a
  * derived number) so the SSE channel and DB `Solution.usage`
@@ -42,7 +42,7 @@ export type SseEventName =
  * accumulated SSE events without a follow-up GET.
  */
 export type SseEventPayload =
-  | { status: 'pending' | 'solving' | 'done' | 'failed' | 'already_processing' }
+  | { status: 'pending' | 'solving' | 'done' | 'failed' }
   | { text: string }
   | { problemId: number; solutionId: number; usage: Usage }
   | { message: string };
