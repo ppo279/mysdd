@@ -16,7 +16,7 @@
 _Avoid_: 解题尝试 / Attempt / Answer
 
 **Problem**：
-家长上传的一道题 + 它**唯一一次** AI 求解尝试的容器。`status` 是状态机（`pending` / `solving` / `done` / `failed`），`failed` 是**终态**——不可重跑 stream，唯一复活路径是新上传一张图。**Problem 是事件不是素材**——每次 `POST /problems` 创建独立 row，server 不做 image-hash dedup；同图重传 = 2 个 Problem + 2 个独立 AI 尝试 + 2 个 Solution。dedup 是 client UI concern，server 不参与。
+家长上传的一道题 + 它**唯一一次** AI 求解尝试的容器。`status` 是状态机（`pending` / `solving` / `done` / `failed`），`failed` 是**终态**——不可重跑 stream，唯一复活路径是新上传一张图。**Problem 是事件不是素材**——每次 `POST /problems` 创建独立 row，server 不做 image-hash dedup；同图重传 = 2 个 Problem + 2 个独立 AI 尝试 + 2 个 Solution。dedup 是 client UI concern，server 不参与。**grade 是 live reference**——Problem + Solution 行**不** snapshot `Child.grade`；`Child.grade` 仅在 `solve()` 时被 `buildSystemPrompt(grade)` 消费，system prompt 文本**不**持久化。Solution.content 自身完整（"answer is answer"），家长 PATCH `Child.grade` 后旧 Solution 仍按 content 自身呈现，**不**重新解释。
 _Avoid_: Task / Job
 
 **Problem.imageUrl**：
