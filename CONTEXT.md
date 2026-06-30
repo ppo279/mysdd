@@ -6,6 +6,29 @@
 
 ---
 
+## Language（术语 / 核心概念边界）
+
+> 项目 canonical 词汇。所有 issue / doc / code 评论用字以此为准。
+> **任何代码 / PR 评审若用了 _Avoid_ 里的词，视为脏字，需替换。**
+
+**解题思路 (Solution)**：
+与一条 Problem 1:0..1 对应的最终答案文字。一条 Problem **成功求解后最多 1 条** Solution 行；失败路径**不写** Solution。schema 当前是 1:N（`solutions Solution[]`），将随下一次 schema 迁移收窄为 1:0..1（`solution Solution?`），与单例语义对齐。
+_Avoid_: 解题尝试 / Attempt / Answer
+
+**Problem**：
+家长上传的一道题 + 它**唯一一次** AI 求解尝试的容器。`status` 是状态机（`pending` / `solving` / `done` / `failed`），`failed` 是**终态**——不可重跑 stream，唯一复活路径是新上传一张图。
+_Avoid_: Task / Job
+
+**Problem.imageUrl**：
+与 Problem 同生死但与 `status` **解耦**——落盘只取决于上传阶段是否成功（`ProblemsService.create` 的 step 3+4），与 AI 求解成败**无关**。schema 字段非 nullable；`status='failed'` 时若非空，磁盘文件仍可被 `GET /problems/:id/image` 重读。
+_Avoid_: Solution.image / Problem 附件
+
+**失败 Problem (failed Problem)**：
+`status='failed'` 的 Problem 行**没有** Solution，但 image 是用户的可重看数据。`GET /problems/:id/image` 对 `status='failed'` 且 `imageUrl != ''` 时返 **200**，AI 状态通过响应头 `X-AI-Status: failed` 透出（**不挡 body**）。
+_Avoid_: terminated Problem / abandoned Problem
+
+---
+
 ## 0. 项目现状速览
 
 | 模块 | 状态 | 说明 |
