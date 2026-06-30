@@ -13,7 +13,29 @@
 | Auth | ✅ shipped | `register / login / me`，16 项 e2e 全过 |
 | Prisma | ✅ shipped | User/Child/Problem/Solution 四表；`Child.grade` 1–12 CHECK 已加（003 #2） |
 | Children | ✅ shipped | 4 端点已上线（commit `11f4967`） |
-| Problems | 🟡 PRD shiped + grill | 父 PRD 已发布；`001` slice 1（upload）已 shiped；`002` slice 2（SSE）ready-for-agent；`003` phase 2 backlog 4/5 完成 |
+| Problems | ✅ all shipped | 父 PRD + 001/002/003/009 全部 shiped（详见 [§Issue sync table](#issue-sync-table--canonical-source-for-issue--commit-status)） |
+
+---
+
+### 0.1. Issue sync table — canonical source for issue / commit status
+
+> 本表是"哪个 issue ship 在哪个 commit"的**唯一真相源**。所有 `docs/issues/*.md` 的 frontmatter（`status` / `shipped_commit` / `github_issue`）都从此表 derive。一次 housekeeping pass 改这一处即可，**不再**挨个 issue body / frontmatter 重复刷状态。
+
+| Issue | Status | shipped_commit | Note |
+|---|---|---|---|
+| #3 Slice 1 (上传 + 读状态 + 读图) | ✅ shipped | `20b49b3` | — |
+| #4 Slice 2 (求解 + SSE 流) | ✅ shipped | `a7b6990` | — |
+| #5 Phase 2 backlog (5/5 done) | ✅ shipped | `25394bd` + `03873cb` | #4 `@Global()` 升格由 JanitorModule 触发 |
+| #7 Grill 整合 (D4 GIF + D9 auth envelope) | ✅ shipped | `c26f0cb` (housekeeping) | D9 已撤销（已有全局 `WrapResponseInterceptor`） |
+| #9 Janitor cron (stuck-solving + orphan file) | ✅ shipped | `aa43e98` | — |
+| #11 004 children-doc-drift audit | ✅ shipped | `82bee16` | 14 项 + 1 doc 注释一次性 close |
+| Children Module CRUD (无 GitHub issue) | ✅ shipped | `11f4967` | — |
+
+**维护规则**：
+
+1. 当某 issue 的功能 commit 落地（slice shipped），本表加 1 行（status + commit sha + 1 句 note）。
+2. housekeeping commit（`c26f0cb` 风格）刷本表 + §5 推进清单的"状态列"。
+3. 任何"issue body frontmatter 与本表不一致"的矛盾，以本表为准。
 
 ---
 
@@ -161,11 +183,12 @@ G3 ───→ Q8 子补丁；触发新 issue（auth 信封化）
 | 项 | 状态 | GitHub | 说明 |
 |---|---|---|---|
 | 001 — Slice 1: 上传 + 读状态 + 读图 | ✅ shipped | [#3](https://github.com/ppo279/mysdd/issues/3) | 关联 ADR-0005 + ADR-0006 |
-| 002 — Slice 2: 求解 + SSE 流 | 🟡 ready-for-agent | [#4](https://github.com/ppo279/mysdd/issues/4) | 关联 ADR-0004 |
-| 003 — Phase 2 backlog | ✅ 5/5 done | [#5](https://github.com/ppo279/mysdd/issues/5) | #4（@Global 决策）已升格（commit `03873cb`） || Children Module CRUD | ✅ shipped | — | 关联 ADR-0004/0005/0006（commit `11f4967`） |
+| 002 — Slice 2: 求解 + SSE 流 | ✅ shipped `a7b6990` | [#4](https://github.com/ppo279/mysdd/issues/4) | 关联 ADR-0004 |
+| 003 — Phase 2 backlog | ✅ 5/5 done | [#5](https://github.com/ppo279/mysdd/issues/5) | #4（@Global 决策）已升格（commit `03873cb`） |
+| Children Module CRUD | ✅ shipped `11f4967` | — | 关联 ADR-0004/0005/0006 |
 | D4 — GIF MIME 移除 | ✅ 已合入 | [#7](https://github.com/ppo279/mysdd/issues/7)（已 close） | 11 处改动，46/46 e2e 全过 |
 | D9 — Auth 信封化 | ❌ 已撤销 | [#7](https://github.com/ppo279/mysdd/issues/7) comment | 已有全局 `WrapResponseInterceptor`，无需改动 |
-| Janitor cron 框架 + 双 job | 🟡 ready-for-agent | [#9](https://github.com/ppo279/mysdd/issues/9) | 整合 solving 卡死 sweeper + orphan file 清理；引用 ADR-0004/0006 |
+| Janitor cron 框架 + 双 job | ✅ shipped `aa43e98` | [#9](https://github.com/ppo279/mysdd/issues/9) | 整合 solving 卡死 sweeper + orphan file 清理；引用 ADR-0004/0006 |
 
 ### 已完成无需再动
 
