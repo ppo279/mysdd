@@ -28,7 +28,7 @@ _Avoid_: Solution.image / Problem 附件
 _Avoid_: terminated Problem / abandoned Problem / "all failures 折叠为同一 message"
 
 **SSE 第一帧契约**：
-subscribe 收到的**第一个** `status` 事件 payload 必为 Problem 当前真实 status（`solving` / `done` / `failed` 之一），**无 `already_processing` 折叠**。若 subscribe 命中 `done` 行，紧跟 emit 一次 `done` 事件（payload `{problemId, solutionId, usage}`，usage 与 DB `Solution.usage` 1:1 mirror）后流关闭；若命中 `failed`，紧跟 emit 一次 `error`（payload `{message}`）后流关闭。client **0 后置 GET**——首次订阅即可拿到最终 solution 或失败原因，与 (γ) 原则对齐。
+subscribe 收到的**第一个** `status` 事件 payload 必为 Problem 当前真实 status（`solving` / `done` / `failed` 之一），**无 `already_processing` 折叠**。若 subscribe 命中 `done` 行，紧跟 emit 一次 `done` 事件（payload `{problemId, solutionId, usage}`，usage 与 DB `Solution.usage` 1:1 mirror）后流关闭；若命中 `failed`，紧跟 emit 一次 `error`（payload `{message, code, reason}`，与 (Q7) 失败 Problem 行的 `failureCode` / `failureReason` 1:1 mirror）后流关闭。client **0 后置 GET**——首次订阅即可拿到最终 solution 或失败原因，与 (γ)+(Q7) 原则对齐。
 _Avoid_: "subscribe 拿到 already_processing 就走 GET" / late-arrival hack
 
 ---
