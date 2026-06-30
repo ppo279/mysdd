@@ -1,11 +1,12 @@
 ---
 id: 004-children-doc-drift
 title: 'Children 落地后的文档同步审计'
-status: open
+status: shipped
 triage: ready-for-human
 type: audit
 created: 2026-06-30
 last_updated: 2026-06-30
+shipped_commit: 82bee16
 github_issue: 11
 ---
 
@@ -133,6 +134,22 @@ github_issue: 11
 | Children fixture 段："本片未做切换"（line 57） | 标注动作，且**标注本身已过期** |
 
 003 amended body 的自修正**有但不全**——最终版本不应说"自修正程度 = 0"，那是过头表述。
+
+---
+
+## 5. Resolution (2026-06-30)
+
+全部 14 条 + 1 条代码 doc 注释 (storage.module.ts) 在 commit `82bee16` 同批解决：
+- 5 文件、~590 行改动（4 文档 + 1 注释 + 1 schema enum drop + 1 新 e2e + 2 service 重构 + 1 test 同步）。
+- 本文件推荐的"PR-1..PR-5 拆分"方案**未**采用——按用户指示"在 test-flue 上本地 commit，不推 PR / 不合 main"，全部打包为一个本地 commit（`82bee16`）。本审计作为 tracking issue 使用——功能层已闭环，doc 侧同步一次性完成。
+- 后续 housekeeping pass（commit `c26f0cb`）把 002/003/009 + children.md 的 stale frontmatter 一起关掉。
+- 本审计历史价值：留作 doc-drift 复盘样本（"代码先行、文档分散自承"反模式）；不再阻塞任何 `/implement`。
+
+---
+
+## Amendment log
+
+- **2026-06-30**：shipped. Commit `82bee16 chore(schema): drop OCR-era EnumStatus zombies + sync docs` 一并解决全部 14 条审计项 + 1 条 doc 注释修正。`docs/issues/003-amended-body.md` 的所有自修正条目被 commit `82bee16` 替代为正式 doc sync（不再用"自承"标注）。Frontmatter status sync (`open` → `shipped`) per housekeeping pass。
 
 ---
 

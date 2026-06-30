@@ -1,13 +1,15 @@
 ---
 id: 001-problems-upload-read-image
 title: 'Problems: 上传 + 读状态 + 读图（不接 LLM）'
-status: open
-triage: ready-for-agent
+status: shipped
+triage: ready-for-human
 parent_prd: docs/prd/problems.md
 blocked_by: []
 covers_user_stories: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 19, 20, 21, 25, 26]
 covers_e2e_cases: [1, 2, 3, 4, 5, 6, 7, 9, 12]
 created: 2026-06-26
+shipped_commit: 20b49b3
+last_updated: 2026-06-30
 github_issue: 3
 ---
 
@@ -69,21 +71,27 @@ PRD 明确规定 `ChildrenModule` 尚未落地。e2e 测试 **直接** `prisma.c
 
 ## Acceptance criteria
 
-- [ ] `pnpm test:e2e -- --testPathPattern=problems` 中以下用例全过：#1, #2, #3, #4, #5, #6, #7, #9, #12
-- [ ] `pnpm test:e2e -- --testPathPattern=auth` 仍全过（无回归）
-- [ ] `pnpm lint` 干净，`pnpm build` 干净，`pnpm exec tsc --noEmit` 干净
-- [ ] 手工 smoke：注册 → 建 Child（直接 prisma）→ 上传 tiny.png → 收到 201 + `data.id` + `data.imageUrl='/problems/<id>/image'` → `GET /problems/:id` 看到 `status: 'pending'` → `GET /problems/:id/image` 拿到原始 bytes + 正确 `Content-Type`
-- [ ] 上传 11 MB 文件 → 400 `图片过大，最大 10MB`
-- [ ] 上传 HEIC MIME → 400 `不支持的图片格式: image/heic，仅允许 JPEG/PNG/WEBP`
-- [ ] 上传 GIF MIME → 400 `不支持的图片格式: image/gif，仅允许 JPEG/PNG/WEBP`（2026-06-29 D4 补丁新增）
-- [ ] 上传无 `image` 字段 → 400 `请上传题目图片`
-- [ ] 用别人的 childId 上传 → 404 `child 不存在`（不是 403）
-- [ ] `GET /problems/<不存在的id>` → 404 `problem 不存在`
-- [ ] `GET /problems/<别人的id>` → 404 `problem 不存在`（不是 403）
-- [ ] 写盘失败路径存在（slice 1 不写 e2e 测试，但代码路径要走通）：DB 行落 `status=failed`、文件不残留、`storage.delete` best-effort（warn 日志即可）
-- [ ] 测试每次 `afterEach` 清理 `./uploads/problems/<userId>/*`（不污染下一次用例）
-- [ ] `.gitignore` 增加 `uploads/` 避免本地测试产物入库
+- [x] `pnpm test:e2e -- --testPathPattern=problems` 中以下用例全过：#1, #2, #3, #4, #5, #6, #7, #9, #12
+- [x] `pnpm test:e2e -- --testPathPattern=auth` 仍全过（无回归）
+- [x] `pnpm lint` 干净，`pnpm build` 干净，`pnpm exec tsc --noEmit` 干净
+- [x] 手工 smoke：注册 → 建 Child（直接 prisma）→ 上传 tiny.png → 收到 201 + `data.id` + `data.imageUrl='/problems/<id>/image'` → `GET /problems/:id` 看到 `status: 'pending'` → `GET /problems/:id/image` 拿到原始 bytes + 正确 `Content-Type`
+- [x] 上传 11 MB 文件 → 400 `图片过大，最大 10MB`
+- [x] 上传 HEIC MIME → 400 `不支持的图片格式: image/heic，仅允许 JPEG/PNG/WEBP`
+- [x] 上传 GIF MIME → 400 `不支持的图片格式: image/gif，仅允许 JPEG/PNG/WEBP`（2026-06-29 D4 补丁新增）
+- [x] 上传无 `image` 字段 → 400 `请上传题目图片`
+- [x] 用别人的 childId 上传 → 404 `child 不存在`（不是 403）
+- [x] `GET /problems/<不存在的id>` → 404 `problem 不存在`
+- [x] `GET /problems/<别人的id>` → 404 `problem 不存在`（不是 403）
+- [x] 写盘失败路径存在（slice 1 不写 e2e 测试，但代码路径要走通）：DB 行落 `status=failed`、文件不残留、`storage.delete` best-effort（warn 日志即可）
+- [x] 测试每次 `afterEach` 清理 `./uploads/problems/<userId>/*`（不污染下一次用例）
+- [x] `.gitignore` 增加 `uploads/` 避免本地测试产物入库
 
 ## Blocked by
 
 None —— `AuthModule` 已落地、`Prisma schema` 已就位、`@RawResponse` 装饰器已就位。
+
+---
+
+## Amendment log
+
+- **2026-06-30**：shipped. Commit `20b49b3 feat(problems): upload + read state + read image (issue 001)`. Acceptance criteria all checked (24/24 problems e2e + 15/15 auth regression, lint 0 errors, build clean, tsc --noEmit clean). Frontmatter status sync (`open` → `shipped`) per housekeeping pass. Earlier acceptance sync to amended body (`docs/issues/003-amended-body.md`) preserved — that file remains the source of truth for the GIF/MIME/@Global()/fixture amendment log entries.
