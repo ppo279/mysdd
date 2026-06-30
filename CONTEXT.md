@@ -31,6 +31,10 @@ _Avoid_: terminated Problem / abandoned Problem / "all failures 折叠为同一 
 subscribe 收到的**第一个** `status` 事件 payload 必为 Problem 当前真实 status（`solving` / `done` / `failed` 之一），**无 `already_processing` 折叠**。若 subscribe 命中 `done` 行，紧跟 emit 一次 `done` 事件（payload `{problemId, solutionId, usage}`，usage 与 DB `Solution.usage` 1:1 mirror）后流关闭；若命中 `failed`，紧跟 emit 一次 `error`（payload `{message, code, reason}`，与 (Q7) 失败 Problem 行的 `failureCode` / `failureReason` 1:1 mirror）后流关闭。client **0 后置 GET**——首次订阅即可拿到最终 solution 或失败原因，与 (γ)+(Q7) 原则对齐。
 _Avoid_: "subscribe 拿到 already_processing 就走 GET" / late-arrival hack
 
+**删除语义 (PoC policy)**：
+PoC 阶段 **User / Child / Problem 链事实上 immutable**——`DELETE /users/me` / `DELETE /problems/:id` 不存在；`DELETE /children/:id` 存在但 per (Q5) 任何 Child 一旦有 Problem 即**永远 409**（fresh-created 0 Problem 的 Child 可删，但 create 后任意 upload 即锁死）。GDPR right-to-delete 是 known limitation，**不**在 PoC scope。与 (Q5) 一致——"Problem 是事件不可撤销"延伸为"整链 immutable"。Future: `DELETE /users/me` cascade hard delete（User → Child → Problem → Solution + image on disk），可由 1 次一次性 cascade Job 执行（**不**走 Janitor cron 框架——Janitor 是周期性, 一次性 cascade 不属于 Janitor scope）。
+_Avoid_: "soft delete via deletedAt" / "audit log 保留删除痕迹" / "tombstone 标记"
+
 ---
 
 ## 0. 项目现状速览
@@ -231,6 +235,7 @@ G3 ───→ Q8 子补丁；触发新 issue（auth 信封化）
 - ❌ `Last-Event-ID` SSE 重连重放（PRD 第 406 行明确不做）
 - ❌ `Problem.reasoning` 持久化列（同上）
 - ❌ 多图上传（一图 = 一题，PRD 第 402 行）
+- ❌ GDPR right-to-delete (PoC 不实现 DELETE 端点；链 immutable 锁于 (Q9))
 
 ---
 
